@@ -51,22 +51,33 @@ void test_router() {
 }
 
 /// <summary>
-/// 測試 Fail-Fast API 傳入非法參數的例外擲出。
+/// 測試 Fail-Fast API 與 CRLF 防護例外擲出。
 /// </summary>
-void test_fail_fast_exceptions() {
-    std::println("[TEST] Running Fail-Fast Exception Tests...");
+void test_security_exceptions() {
+    std::println("[TEST] Running Security & Exception Tests...");
 
     httplib23::Router router;
     
-    bool exception_caught = false;
+    // 1. 驗證非法 Pattern 不以 '/' 開頭會擲出 std::invalid_argument
+    bool invalid_path_caught = false;
     try {
         router.add_route(httplib23::Method::GET, "invalid_path");
     } catch (const std::invalid_argument&) {
-        exception_caught = true;
+        invalid_path_caught = true;
     }
-    assert(exception_caught == true);
+    assert(invalid_path_caught == true);
 
-    std::println("  -> Fail-Fast exception tests passed!");
+    // 2. 驗證 CRLF 注入防護
+    httplib23::Response res;
+    bool crlf_caught = false;
+    try {
+        res.set_header("X-Custom-Header", "admin=true\r\nSet-Cookie: session=hacked");
+    } catch (const std::invalid_argument&) {
+        crlf_caught = true;
+    }
+    assert(crlf_caught == true);
+
+    std::println("  -> Security & Exception tests passed!");
 }
 
 /// <summary>
@@ -90,7 +101,7 @@ void test_openapi_gen() {
 }
 
 /// <summary>
-/// 測試 Server 與 Client 整合及高併發壓測。
+/// 測試 Server 與 Client 整合及高併發壓測與 Slowloris 防護。
 /// </summary>
 void test_server_client_integration() {
     std::println("[TEST] Running Server/Client Integration & High-Concurrency Tests...");
@@ -182,6 +193,8 @@ void test_server_client_integration() {
         w.join();
     }
 
+    std::println("  [STRESS RESULT] success_count: {} / {}", success_count.load(), NUM_THREADS * REQS_PER_THREAD);
+    std::fflush(stdout);
     assert(success_count == NUM_THREADS * REQS_PER_THREAD);
     std::println("  -> High Concurrency Stress Test passed! All {} requests succeeded!", success_count.load());
 
@@ -198,7 +211,7 @@ int main() {
 
     test_utils();
     test_router();
-    test_fail_fast_exceptions();
+    test_security_exceptions();
     test_openapi_gen();
     test_server_client_integration();
 

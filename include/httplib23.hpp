@@ -52,6 +52,15 @@
 namespace httplib23 {
 
 // ============================================================================
+// Security Limits & Constants
+// ============================================================================
+
+static constexpr size_t MAX_HEADER_SIZE = 64 * 1024;            // 64 KB Max Header Size
+static constexpr size_t MAX_BODY_SIZE = 10 * 1024 * 1024;       // 10 MB Max Body Size
+static constexpr size_t MAX_QUEUE_SIZE = 10000;                // Max Bounded Queue Size
+static constexpr std::chrono::seconds CONNECTION_TIMEOUT{15};  // 15s Slowloris Timeout
+
+// ============================================================================
 // 1. Core HTTP Enums & Types
 // ============================================================================
 
@@ -73,6 +82,7 @@ enum class StatusCode : int32_t {
     NotFound = 404,
     MethodNotAllowed = 405,
     Conflict = 409,
+    PayloadTooLarge = 413,
     InternalServerError = 500,
     NotImplemented = 501,
     BadGateway = 502,
@@ -100,6 +110,7 @@ enum class StatusCode : int32_t {
         case 404: return "Not Found";
         case 405: return "Method Not Allowed";
         case 409: return "Conflict";
+        case 413: return "Payload Too Large";
         case 500: return "Internal Server Error";
         case 501: return "Not Implemented";
         case 502: return "Bad Gateway";
@@ -198,15 +209,24 @@ using HeaderMap = std::unordered_map<std::string, std::string, CaseInsensitiveHa
 namespace detail {
 
 /// <summary>
-/// 修剪字串前後空白字元。
+/// 檢查 Header Key 或 Value 是否包含 CRLF 注入字元。
+/// </summary>
+/// <param name="str">待檢查字串。</param>
+/// <returns>若包含 CRLF 傳回 true。</returns>
+[[nodiscard]] inline constexpr bool contains_crlf(const std::string_view str) noexcept {
+    return str.find('\r') != std::string_view::npos || str.find('\n') != std::string_view::npos;
+}
+
+/// <summary>
+/// 修剪字串前後空白字元 (Zero-copy std::string_view)。
 /// </summary>
 /// <param name="str">待修剪字串。</param>
-/// <returns>修剪後之字串。</returns>
-[[nodiscard]] inline std::string trim(const std::string_view str) noexcept {
+/// <returns>修剪後之 string_view。</returns>
+[[nodiscard]] inline constexpr std::string_view trim(const std::string_view str) noexcept {
     const size_t start = str.find_first_not_of(" \t\r\n");
     if (start == std::string_view::npos) return "";
     const size_t end = str.find_last_not_of(" \t\r\n");
-    return std::string(str.substr(start, end - start + 1));
+    return str.substr(start, end - start + 1);
 }
 
 /// <summary>
@@ -376,8 +396,8 @@ struct Response {
     /// </summary>
     void set_content(const std::string_view content, const std::string_view content_type = "text/plain; charset=utf-8") noexcept {
         body = std::string(content);
-        headers["Content-Type"] = std::string(content_type);
-        headers["Content-Length"] = std::to_string(body.size());
+        set_header("Content-Type", std::string(content_type));
+        set_header("Content-Length", std::to_string(body.size()));
     }
 
     /// <summary>
@@ -388,27 +408,31 @@ struct Response {
     }
 
     /// <summary>
-    /// 設定自訂 Response Header。
+    /// 設定自訂 Response Header（含 CRLF 注入過濾檢查）。
     /// </summary>
-    void set_header(std::string key, std::string value) noexcept {
+    /// <exception cref="std::invalid_argument">當 Header key 或 value 包含 CRLF 時擲出。</exception>
+    void set_header(std::string key, std::string value) {
+        if (detail::contains_crlf(key) || detail::contains_crlf(value)) {
+            throw std::invalid_argument("CRLF injection detected in HTTP header key or value");
+        }
         headers[std::move(key)] = std::move(value);
     }
 
     /// <summary>
     /// 設定重導向 Response。
     /// </summary>
-    void set_redirect(const std::string_view location, const int32_t redirect_status = 302) noexcept {
+    void set_redirect(const std::string_view location, const int32_t redirect_status = 302) {
         status = redirect_status;
-        headers["Location"] = std::string(location);
+        set_header("Location", std::string(location));
         set_content("", "text/plain");
     }
 
     /// <summary>
-    /// 將 Response 序列化為 HTTP 協定串流。
+    /// 將 Header 序列化為 HTTP 協定標頭字串（適用於 Scatter-Gather I/O）。
     /// </summary>
-    [[nodiscard]] std::string serialize() const noexcept {
+    [[nodiscard]] std::string serialize_headers() const noexcept {
         std::string res;
-        res.reserve(256 + body.size());
+        res.reserve(256);
         const std::string_view msg = get_status_message(status);
         res += std::format("HTTP/1.1 {} {}\r\n", status, msg);
         
@@ -427,7 +451,6 @@ struct Response {
             res += "\r\n";
         }
         res += "\r\n";
-        res += body;
         return res;
     }
 };
@@ -792,11 +815,11 @@ public:
 };
 
 // ============================================================================
-// 7. Thread Pool Engine
+// 7. Thread Pool Engine (With Bounded Queue Size)
 // ============================================================================
 
 /// <summary>
-/// 高效能 Worker 執行緒池。
+/// 高效能有界 Worker 執行緒池 (Bounded Queue Backpressure)。
 /// </summary>
 class ThreadPool {
 private:
@@ -805,9 +828,11 @@ private:
     std::mutex m_queue_mutex;
     std::condition_variable m_cv;
     std::atomic<bool> m_stop{false};
+    size_t m_max_queue_size = MAX_QUEUE_SIZE;
 
 public:
-    explicit ThreadPool(size_t threads = std::thread::hardware_concurrency()) {
+    explicit ThreadPool(size_t threads = std::thread::hardware_concurrency(), const size_t max_queue_size = MAX_QUEUE_SIZE)
+        : m_max_queue_size(max_queue_size) {
         threads = std::max<size_t>(threads, 2);
         for (size_t i = 0; i < threads; ++i) {
             m_workers.emplace_back([this]() {
@@ -836,24 +861,45 @@ public:
         }
     }
 
-    void enqueue(std::function<void()> task) {
-        if (!task) {
-            throw std::invalid_argument("Task cannot be empty");
-        }
+    /// <summary>
+    /// 將 Task 放入佇列。若佇列已滿傳回 false。
+    /// </summary>
+    [[nodiscard]] bool enqueue(std::function<void()> task) noexcept {
+        if (!task) return false;
         {
             std::unique_lock<std::mutex> lock(m_queue_mutex);
+            if (m_tasks.size() >= m_max_queue_size) {
+                return false; // Backpressure: Queue Full
+            }
             m_tasks.push(std::move(task));
         }
         m_cv.notify_one();
+        return true;
     }
 };
 
 // ============================================================================
-// 8. IOCP Server Implementation
+// 8. Connection Session State Machine & Security Protection
 // ============================================================================
 
 /// <summary>
-/// 高併發 Windows IOCP HTTP 伺服器。
+/// 每條 TCP 連線 Session 狀態機與累積 Receiving Buffer。
+/// </summary>
+struct ConnectionSession {
+    SOCKET socket = INVALID_SOCKET;
+    std::vector<char> rx_buffer;
+    std::chrono::steady_clock::time_point last_active = std::chrono::steady_clock::now();
+    bool header_parsed = false;
+    size_t content_length = 0;
+    size_t header_length = 0;
+};
+
+// ============================================================================
+// 9. IOCP Server Implementation
+// ============================================================================
+
+/// <summary>
+/// 高併發 Windows IOCP HTTP 伺服器 (包含 Slowloris 防護, TCP 黏包/拆包處理與 Scatter-Gather Send)。
 /// </summary>
 class Server {
 public:
@@ -867,17 +913,22 @@ private:
     std::vector<MiddlewareFunc> m_middlewares;
     std::unique_ptr<ThreadPool> m_pool;
     std::thread m_accept_thread;
+    std::thread m_watchdog_thread;
     std::vector<std::thread> m_iocp_threads;
+
+    std::mutex m_session_mutex;
+    std::unordered_map<SOCKET, std::shared_ptr<ConnectionSession>> m_sessions;
 
     enum class IOOperation : uint8_t { READ, WRITE };
 
     struct PerIoData {
         WSAOVERLAPPED overlapped;
-        WSABUF wsa_buf;
+        WSABUF wsa_bufs[2];
         char buffer[8192];
         IOOperation op_type;
         SOCKET socket;
-        std::vector<char> dynamic_send_buf;
+        std::string send_header_buf;
+        std::string send_body_buf;
     };
 
 public:
@@ -980,6 +1031,7 @@ public:
         }
 
         m_accept_thread = std::thread([this]() { accept_loop(); });
+        m_watchdog_thread = std::thread([this]() { timeout_watchdog_loop(); });
         return true;
     }
 
@@ -987,24 +1039,43 @@ public:
         if (!m_running) return;
         m_running = false;
 
+        // 1. Post exit signals to Worker threads first
+        if (m_iocp != INVALID_HANDLE_VALUE) {
+            for (size_t i = 0; i < m_iocp_threads.size(); ++i) {
+                PostQueuedCompletionStatus(m_iocp, 0, 0, NULL);
+            }
+        }
+
+        // 2. Close listen socket
         if (m_listen_socket != INVALID_SOCKET) {
             closesocket(m_listen_socket);
             m_listen_socket = INVALID_SOCKET;
         }
 
-        if (m_iocp != INVALID_HANDLE_VALUE) {
-            for (size_t i = 0; i < m_iocp_threads.size(); ++i) {
-                PostQueuedCompletionStatus(m_iocp, 0, 0, NULL);
-            }
-            CloseHandle(m_iocp);
-            m_iocp = INVALID_HANDLE_VALUE;
-        }
-
+        // 3. Join threads
         if (m_accept_thread.joinable()) m_accept_thread.join();
+        if (m_watchdog_thread.joinable()) m_watchdog_thread.join();
         for (auto& th : m_iocp_threads) {
             if (th.joinable()) th.join();
         }
         m_iocp_threads.clear();
+
+        // 4. Close remaining active client sockets
+        {
+            std::lock_guard<std::mutex> lock(m_session_mutex);
+            for (const auto& [sock, session] : m_sessions) {
+                closesocket(sock);
+            }
+            m_sessions.clear();
+        }
+
+        // 5. Close IOCP Handle
+        if (m_iocp != INVALID_HANDLE_VALUE) {
+            CloseHandle(m_iocp);
+            m_iocp = INVALID_HANDLE_VALUE;
+        }
+
+        // 6. Reset thread pool
         m_pool.reset();
     }
 
@@ -1024,22 +1095,66 @@ private:
                 continue;
             }
 
+            // Create Connection Session
+            auto session = std::make_shared<ConnectionSession>();
+            session->socket = client_socket;
+            {
+                std::lock_guard<std::mutex> lock(m_session_mutex);
+                m_sessions[client_socket] = session;
+            }
+
             auto io_data = std::make_unique<PerIoData>();
             ZeroMemory(&io_data->overlapped, sizeof(OVERLAPPED));
             io_data->op_type = IOOperation::READ;
             io_data->socket = client_socket;
-            io_data->wsa_buf.buf = io_data->buffer;
-            io_data->wsa_buf.len = sizeof(io_data->buffer);
+            io_data->wsa_bufs[0].buf = io_data->buffer;
+            io_data->wsa_bufs[0].len = sizeof(io_data->buffer);
 
             DWORD flags = 0;
             DWORD bytes_recv = 0;
             PerIoData* raw_ptr = io_data.release();
-            if (WSARecv(client_socket, &raw_ptr->wsa_buf, 1, &bytes_recv, &flags, &raw_ptr->overlapped, NULL) == SOCKET_ERROR) {
+            if (WSARecv(client_socket, &raw_ptr->wsa_bufs[0], 1, &bytes_recv, &flags, &raw_ptr->overlapped, NULL) == SOCKET_ERROR) {
                 if (WSAGetLastError() != ERROR_IO_PENDING) {
-                    closesocket(client_socket);
+                    remove_session(client_socket);
                     delete raw_ptr;
                 }
             }
+        }
+    }
+
+    void timeout_watchdog_loop() noexcept {
+        while (m_running) {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            if (!m_running) break;
+
+            const auto now = std::chrono::steady_clock::now();
+            std::vector<SOCKET> timed_out_sockets;
+
+            {
+                std::lock_guard<std::mutex> lock(m_session_mutex);
+                for (const auto& [sock, session] : m_sessions) {
+                    if (now - session->last_active > CONNECTION_TIMEOUT) {
+                        timed_out_sockets.push_back(sock);
+                    }
+                }
+            }
+
+            for (const SOCKET sock : timed_out_sockets) {
+                remove_session(sock);
+            }
+        }
+    }
+
+    void remove_session(const SOCKET sock) noexcept {
+        std::lock_guard<std::mutex> lock(m_session_mutex);
+        if (m_sessions.contains(sock)) {
+            // Drain any unread bytes before closing to ensure clean FIN instead of RST
+            char dummy[512];
+            u_long mode = 1;
+            ioctlsocket(sock, FIONBIO, &mode);
+            while (recv(sock, dummy, sizeof(dummy), 0) > 0) {}
+            closesocket(sock);
+            m_sessions.erase(sock);
         }
     }
 
@@ -1062,7 +1177,7 @@ private:
             if (!result || bytes_transferred == 0) {
                 if (overlapped) {
                     PerIoData* io_data = CONTAINING_RECORD(overlapped, PerIoData, overlapped);
-                    closesocket(io_data->socket);
+                    remove_session(io_data->socket);
                     delete io_data;
                 }
                 continue;
@@ -1072,15 +1187,151 @@ private:
             const SOCKET client_socket = io_data->socket;
 
             if (io_data->op_type == IOOperation::READ) {
-                std::string raw_request(io_data->buffer, bytes_transferred);
+                std::shared_ptr<ConnectionSession> session;
+                {
+                    std::lock_guard<std::mutex> lock(m_session_mutex);
+                    const auto it = m_sessions.find(client_socket);
+                    if (it != m_sessions.end()) {
+                        session = it->second;
+                    }
+                }
+
+                if (!session) {
+                    delete io_data;
+                    continue;
+                }
+
+                session->last_active = std::chrono::steady_clock::now();
+                session->rx_buffer.insert(session->rx_buffer.end(), io_data->buffer, io_data->buffer + bytes_transferred);
                 delete io_data;
 
-                m_pool->enqueue([this, client_socket, request_str = std::move(raw_request)]() {
-                    handle_http_request(client_socket, request_str);
-                });
+                // Check TCP Packet Assembly
+                const std::string_view rx_sv(session->rx_buffer.data(), session->rx_buffer.size());
+                
+                if (!session->header_parsed) {
+                    const size_t header_end = rx_sv.find("\r\n\r\n");
+                    if (header_end != std::string_view::npos) {
+                        session->header_length = header_end + 4;
+                        session->header_parsed = true;
+
+                        // Parse Content-Length header using Zero-Copy string_view
+                        const std::string_view header_sv = rx_sv.substr(0, header_end);
+                        session->content_length = parse_content_length(header_sv);
+
+                        // DoS Security Check: Excess Content-Length
+                        if (session->content_length > MAX_BODY_SIZE || session->header_length > MAX_HEADER_SIZE) {
+                            send_error_response(client_socket, 413, "Payload Too Large");
+                            remove_session(client_socket);
+                            continue;
+                        }
+                    } else if (session->rx_buffer.size() > MAX_HEADER_SIZE) {
+                        send_error_response(client_socket, 413, "Header Size Exceeds Limit");
+                        remove_session(client_socket);
+                        continue;
+                    }
+                }
+
+                // If Header & Body completely assembled
+                if (session->header_parsed) {
+                    const size_t total_expected = session->header_length + session->content_length;
+                    if (session->rx_buffer.size() >= total_expected) {
+                        std::string full_request(session->rx_buffer.data(), total_expected);
+                        
+                        // Erase processed bytes from session buffer
+                        session->rx_buffer.erase(session->rx_buffer.begin(), session->rx_buffer.begin() + total_expected);
+                        session->header_parsed = false;
+                        session->content_length = 0;
+                        session->header_length = 0;
+
+                        // Enqueue Task to Bounded ThreadPool
+                        const bool queued = m_pool->enqueue([this, client_socket, req_str = std::move(full_request)]() {
+                            handle_http_request(client_socket, req_str);
+                        });
+
+                        if (!queued) {
+                            // Backpressure: Queue Full
+                            send_error_response(client_socket, 503, "Service Unavailable - Server Busy");
+                            remove_session(client_socket);
+                            continue;
+                        }
+                    }
+                }
+
+                // Post Next Async Read
+                auto next_io = std::make_unique<PerIoData>();
+                ZeroMemory(&next_io->overlapped, sizeof(OVERLAPPED));
+                next_io->op_type = IOOperation::READ;
+                next_io->socket = client_socket;
+                next_io->wsa_bufs[0].buf = next_io->buffer;
+                next_io->wsa_bufs[0].len = sizeof(next_io->buffer);
+
+                DWORD flags = 0;
+                DWORD next_recv = 0;
+                PerIoData* raw_next = next_io.release();
+                if (WSARecv(client_socket, &raw_next->wsa_bufs[0], 1, &next_recv, &flags, &raw_next->overlapped, NULL) == SOCKET_ERROR) {
+                    if (WSAGetLastError() != ERROR_IO_PENDING) {
+                        remove_session(client_socket);
+                        delete raw_next;
+                    }
+                }
             } else if (io_data->op_type == IOOperation::WRITE) {
-                closesocket(client_socket);
+                shutdown(client_socket, SD_SEND);
+                remove_session(client_socket);
                 delete io_data;
+            }
+        }
+    }
+
+    [[nodiscard]] static size_t parse_content_length(const std::string_view header_sv) noexcept {
+        size_t pos = 0;
+        while (pos < header_sv.size()) {
+            size_t line_end = header_sv.find("\r\n", pos);
+            if (line_end == std::string_view::npos) line_end = header_sv.size();
+            const std::string_view line = header_sv.substr(pos, line_end - pos);
+            const size_t colon = line.find(':');
+            if (colon != std::string_view::npos) {
+                const std::string_view key = detail::trim(line.substr(0, colon));
+                if (CaseInsensitiveCompare{}(key, "Content-Length")) {
+                    const std::string_view val = detail::trim(line.substr(colon + 1));
+                    size_t len = 0;
+                    const auto [ptr, ec] = std::from_chars(val.data(), val.data() + val.size(), len);
+                    if (ec == std::errc{}) return len;
+                }
+            }
+            pos = line_end + 2;
+        }
+        return 0;
+    }
+
+    void send_error_response(const SOCKET client_socket, const int32_t status_code, const std::string_view msg) noexcept {
+        Response res;
+        res.status = status_code;
+        res.set_content(msg, "text/plain");
+        send_response_scatter(client_socket, res);
+    }
+
+    void send_response_scatter(const SOCKET client_socket, const Response& res) noexcept {
+        auto send_io = std::make_unique<PerIoData>();
+        ZeroMemory(&send_io->overlapped, sizeof(OVERLAPPED));
+        send_io->op_type = IOOperation::WRITE;
+        send_io->socket = client_socket;
+
+        send_io->send_header_buf = res.serialize_headers();
+        send_io->send_body_buf = res.body;
+
+        // Scatter-Gather WSABUF Array
+        send_io->wsa_bufs[0].buf = send_io->send_header_buf.data();
+        send_io->wsa_bufs[0].len = static_cast<ULONG>(send_io->send_header_buf.size());
+
+        send_io->wsa_bufs[1].buf = send_io->send_body_buf.data();
+        send_io->wsa_bufs[1].len = static_cast<ULONG>(send_io->send_body_buf.size());
+
+        DWORD bytes_sent = 0;
+        PerIoData* raw_send = send_io.release();
+        if (WSASend(client_socket, raw_send->wsa_bufs, 2, &bytes_sent, 0, &raw_send->overlapped, NULL) == SOCKET_ERROR) {
+            if (WSAGetLastError() != ERROR_IO_PENDING) {
+                remove_session(client_socket);
+                delete raw_send;
             }
         }
     }
@@ -1089,46 +1340,50 @@ private:
         Request req;
         Response res;
 
-        std::istringstream stream(request_str);
-        std::string request_line;
-        if (std::getline(stream, request_line)) {
-            request_line = detail::trim(request_line);
-            std::istringstream line_stream(request_line);
-            std::string method_str, target, version;
-            line_stream >> method_str >> target >> version;
-            req.method = string_to_method(method_str);
-            req.raw_target = target;
+        const std::string_view req_sv(request_str);
+        const size_t req_line_end = req_sv.find("\r\n");
+        if (req_line_end != std::string_view::npos) {
+            const std::string_view req_line = req_sv.substr(0, req_line_end);
+            const size_t sp1 = req_line.find(' ');
+            if (sp1 != std::string_view::npos) {
+                const size_t sp2 = req_line.find(' ', sp1 + 1);
+                if (sp2 != std::string_view::npos) {
+                    const std::string_view method_str = req_line.substr(0, sp1);
+                    const std::string_view target = req_line.substr(sp1 + 1, sp2 - sp1 - 1);
+                    
+                    req.method = string_to_method(method_str);
+                    req.raw_target = std::string(target);
 
-            const size_t query_pos = target.find('?');
-            if (query_pos != std::string::npos) {
-                req.path = target.substr(0, query_pos);
-                req.query_params = detail::parse_query_string(target.substr(query_pos + 1));
-            } else {
-                req.path = target;
+                    const size_t query_pos = target.find('?');
+                    if (query_pos != std::string_view::npos) {
+                        req.path = std::string(target.substr(0, query_pos));
+                        req.query_params = detail::parse_query_string(target.substr(query_pos + 1));
+                    } else {
+                        req.path = std::string(target);
+                    }
+                }
             }
         }
 
-        std::string header_line;
-        while (std::getline(stream, header_line)) {
-            header_line = detail::trim(header_line);
-            if (header_line.empty()) break;
+        // Parse Headers Zero-Copy
+        size_t header_pos = req_line_end + 2;
+        const size_t header_end_all = req_sv.find("\r\n\r\n");
+        while (header_pos < header_end_all && header_pos != std::string_view::npos) {
+            size_t line_end = req_sv.find("\r\n", header_pos);
+            if (line_end == std::string_view::npos || line_end > header_end_all) line_end = header_end_all;
+            const std::string_view header_line = req_sv.substr(header_pos, line_end - header_pos);
             const size_t colon = header_line.find(':');
-            if (colon != std::string::npos) {
-                std::string key = detail::trim(header_line.substr(0, colon));
-                std::string value = detail::trim(header_line.substr(colon + 1));
-                req.headers[key] = value;
+            if (colon != std::string_view::npos) {
+                std::string key(detail::trim(header_line.substr(0, colon)));
+                std::string val(detail::trim(header_line.substr(colon + 1)));
+                req.headers[std::move(key)] = std::move(val);
             }
+            header_pos = line_end + 2;
         }
 
-        if (const auto len_opt = req.get_header("Content-Length")) {
-            int32_t len = 0;
-            const auto [ptr, ec] = std::from_chars(len_opt->data(), len_opt->data() + len_opt->size(), len);
-            if (ec == std::errc{} && len > 0) {
-                std::string body_data;
-                body_data.resize(len);
-                stream.read(body_data.data(), len);
-                req.body = std::move(body_data);
-            }
+        // Body Extraction
+        if (header_end_all != std::string_view::npos && header_end_all + 4 <= req_sv.size()) {
+            req.body = std::string(req_sv.substr(header_end_all + 4));
         }
 
         bool proceed = true;
@@ -1151,30 +1406,12 @@ private:
             }
         }
 
-        const std::string response_payload = res.serialize();
-        auto send_io = std::make_unique<PerIoData>();
-        ZeroMemory(&send_io->overlapped, sizeof(OVERLAPPED));
-        send_io->op_type = IOOperation::WRITE;
-        send_io->socket = client_socket;
-        
-        send_io->dynamic_send_buf.resize(response_payload.size());
-        std::copy(response_payload.begin(), response_payload.end(), send_io->dynamic_send_buf.begin());
-        send_io->wsa_buf.buf = send_io->dynamic_send_buf.data();
-        send_io->wsa_buf.len = static_cast<ULONG>(send_io->dynamic_send_buf.size());
-
-        DWORD bytes_sent = 0;
-        PerIoData* raw_send_ptr = send_io.release();
-        if (WSASend(client_socket, &raw_send_ptr->wsa_buf, 1, &bytes_sent, 0, &raw_send_ptr->overlapped, NULL) == SOCKET_ERROR) {
-            if (WSAGetLastError() != ERROR_IO_PENDING) {
-                closesocket(client_socket);
-                delete raw_send_ptr;
-            }
-        }
+        send_response_scatter(client_socket, res);
     }
 };
 
 // ============================================================================
-// 9. HTTP Client Engine
+// 10. HTTP Client Engine
 // ============================================================================
 
 /// <summary>
@@ -1191,7 +1428,12 @@ public:
             m_host = m_host.substr(7);
             const size_t colon = m_host.find(':');
             if (colon != std::string::npos) {
-                m_port = static_cast<uint16_t>(std::stoi(m_host.substr(colon + 1)));
+                uint16_t parsed_port = 0;
+                const std::string_view port_sv(m_host.data() + colon + 1, m_host.size() - colon - 1);
+                const auto [ptr, ec] = std::from_chars(port_sv.data(), port_sv.data() + port_sv.size(), parsed_port);
+                if (ec == std::errc{}) {
+                    m_port = parsed_port;
+                }
                 m_host = m_host.substr(0, colon);
             }
         }
@@ -1220,10 +1462,23 @@ public:
     }
 
     [[nodiscard]] std::expected<Response, std::string> send_request(const Method method, const std::string_view path, const std::string_view body = "", const std::string_view content_type = "", const HeaderMap& custom_headers = {}) noexcept {
+        for (int32_t attempt = 0; attempt < 3; ++attempt) {
+            auto res = send_request_once(method, path, body, content_type, custom_headers);
+            if (res.has_value()) return res;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return std::unexpected("Failed to receive response after retries");
+    }
+
+private:
+    [[nodiscard]] std::expected<Response, std::string> send_request_once(const Method method, const std::string_view path, const std::string_view body, const std::string_view content_type, const HeaderMap& custom_headers) noexcept {
         const SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (sock == INVALID_SOCKET) {
             return std::unexpected("Failed to create socket");
         }
+
+        BOOL reuse = TRUE;
+        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
 
         addrinfo hints{}, *res = nullptr;
         hints.ai_family = AF_INET;
@@ -1236,7 +1491,15 @@ public:
             return std::unexpected("Failed to resolve host address");
         }
 
-        if (connect(sock, res->ai_addr, static_cast<int32_t>(res->ai_addrlen)) == SOCKET_ERROR) {
+        bool connected = false;
+        for (int32_t retry = 0; retry < 5; ++retry) {
+            if (connect(sock, res->ai_addr, static_cast<int32_t>(res->ai_addrlen)) != SOCKET_ERROR) {
+                connected = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if (!connected) {
             freeaddrinfo(res);
             closesocket(sock);
             return std::unexpected("Failed to connect to host");
@@ -1281,7 +1544,7 @@ public:
         std::istringstream stream(raw_response);
         std::string status_line;
         if (std::getline(stream, status_line)) {
-            status_line = detail::trim(status_line);
+            status_line = std::string(detail::trim(status_line));
             std::istringstream line_stream(status_line);
             std::string http_ver;
             line_stream >> http_ver >> response.status;
@@ -1289,12 +1552,12 @@ public:
 
         std::string header_line;
         while (std::getline(stream, header_line)) {
-            header_line = detail::trim(header_line);
+            header_line = std::string(detail::trim(header_line));
             if (header_line.empty()) break;
             const size_t colon = header_line.find(':');
             if (colon != std::string::npos) {
-                std::string key = detail::trim(header_line.substr(0, colon));
-                std::string val = detail::trim(header_line.substr(colon + 1));
+                std::string key(detail::trim(header_line.substr(0, colon)));
+                std::string val(detail::trim(header_line.substr(colon + 1)));
                 response.headers[key] = val;
             }
         }
