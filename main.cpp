@@ -1,0 +1,53 @@
+#include <iostream>
+#include "httplib23.hpp"
+
+int main() {
+    httplib23::Server server;
+
+    // 1. Health check endpoint
+    server.Get("/ping", "Health Check Endpoint")
+        .tag("Health")
+        .summary("Simple ping/pong check")
+        .response(200, "Returns pong text")
+        .handle([](const httplib23::Request&, httplib23::Response& res) {
+            res.set_content("pong", "text/plain");
+        });
+
+    // 2. User API with path parameters and metadata
+    server.Get("/api/v1/users/{id}", "Get User Details")
+        .tag("User")
+        .summary("Fetch user info by user ID")
+        .param("id", "Unique user ID", true, "path", "integer")
+        .response(200, "User object found", "application/json")
+        .response(404, "User not found", "application/json")
+        .handle([](const httplib23::Request& req, httplib23::Response& res) {
+            auto user_id = req.get_path_param("id").value_or("0");
+            res.set_json(std::format(R"({{"id":{}, "name":"Alice", "role":"admin"}})", user_id));
+        });
+
+    // 3. Post echo endpoint
+    server.Post("/api/v1/echo", "Echo Post Request")
+        .tag("Utility")
+        .summary("Echoes received payload back")
+        .response(200, "Echoed response")
+        .handle([](const httplib23::Request& req, httplib23::Response& res) {
+            res.set_json(std::format(R"({{"status":"success", "received": "{}"}})", req.body));
+        });
+
+    int port = 8080;
+    std::cout << "========================================================\n";
+    std::cout << "Starting httplib23 HTTP Server on http://127.0.0.1:" << port << "\n";
+    std::cout << " - Interactive Scalar API Docs: http://127.0.0.1:" << port << "/docs\n";
+    std::cout << " - OpenAPI 3.0 Specification:  http://127.0.0.1:" << port << "/openapi.json\n";
+    std::cout << "========================================================\n";
+
+    if (server.listen("127.0.0.1", port)) {
+        std::cout << "Server is running! Press Enter to stop...\n";
+        std::cin.get();
+        server.stop();
+    } else {
+        std::cerr << "Failed to start server on port " << port << "\n";
+    }
+
+    return 0;
+}
