@@ -1,6 +1,13 @@
+// filepath: main.cpp
 #include <iostream>
-#include "httplib23.hpp"
+#include <cstdint>
+#include <format>
+#include "include/httplib23.hpp"
 
+/// <summary>
+/// 主程式進入點，初始化 HTTP Server 並啟動服務。
+/// </summary>
+/// <returns>執行結果狀態碼。</returns>
 int main() {
     httplib23::Server server;
 
@@ -9,7 +16,7 @@ int main() {
         .tag("Health")
         .summary("Simple ping/pong check")
         .response(200, "Returns pong text")
-        .handle([](const httplib23::Request&, httplib23::Response& res) {
+        .handle([](const httplib23::Request&, httplib23::Response& res) noexcept {
             res.set_content("pong", "text/plain");
         });
 
@@ -20,8 +27,8 @@ int main() {
         .param("id", "Unique user ID", true, "path", "integer")
         .response(200, "User object found", "application/json")
         .response(404, "User not found", "application/json")
-        .handle([](const httplib23::Request& req, httplib23::Response& res) {
-            auto user_id = req.get_path_param("id").value_or("0");
+        .handle([](const httplib23::Request& req, httplib23::Response& res) noexcept {
+            const auto user_id = req.get_path_param("id").value_or("0");
             res.set_json(std::format(R"({{"id":{}, "name":"Alice", "role":"admin"}})", user_id));
         });
 
@@ -30,11 +37,11 @@ int main() {
         .tag("Utility")
         .summary("Echoes received payload back")
         .response(200, "Echoed response")
-        .handle([](const httplib23::Request& req, httplib23::Response& res) {
+        .handle([](const httplib23::Request& req, httplib23::Response& res) noexcept {
             res.set_json(std::format(R"({{"status":"success", "received": "{}"}})", req.body));
         });
 
-    int port = 8080;
+    const uint16_t port = 8080;
     std::cout << "========================================================\n";
     std::cout << "Starting httplib23 HTTP Server on http://127.0.0.1:" << port << "\n";
     std::cout << " - Interactive Scalar API Docs: http://127.0.0.1:" << port << "/docs\n";
@@ -47,6 +54,7 @@ int main() {
         server.stop();
     } else {
         std::cerr << "Failed to start server on port " << port << "\n";
+        return 1;
     }
 
     return 0;

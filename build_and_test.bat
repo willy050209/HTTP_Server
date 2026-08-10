@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 echo ========================================================
-echo Building and Running httplib23 Tests with MSVC
+echo Building and Running httplib23 Tests with MSVC (C++23)
 echo ========================================================
 
 call "C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars64.bat" > nul
@@ -11,8 +11,8 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-echo Compiling tests with MSVC (/std:c++latest /W4 /WX /EHsc /utf-8)...
-cl.exe /std:c++latest /W4 /WX /EHsc /utf-8 /I. test_runner.cpp /Fe:test_runner.exe ws2_32.lib
+echo Compiling tests with MSVC (/std:c++latest /W4 /WX /EHsc /utf-8 /Iinclude)...
+cl.exe /std:c++latest /W4 /WX /EHsc /utf-8 /Iinclude src\test_runner.cpp /Fe:test_runner.exe ws2_32.lib
 if %errorlevel% neq 0 (
     echo [ERROR] Compilation failed!
     exit /b %errorlevel%
