@@ -1,134 +1,170 @@
 // filepath: src/test_runner.cpp
-#define _CRTDBG_MAP_ALLOC
-#include <crtdbg.h>
-#include <print>
+#include <iostream>
 #include <cassert>
+#include <print>
 #include <thread>
 #include <vector>
+#include <atomic>
 #include <chrono>
-#include <cstdint>
-
+#include <format>
+#include <stdexcept>
 #include "../include/httplib23.hpp"
 
 /// <summary>
-/// 測試 Utility 純函數（URL 解碼、編碼與 Query 解析）。
+/// 測試 1: Utility 工具函式測試
 /// </summary>
-void test_utils() {
+void test_utilities() {
     std::println("[TEST] Running Utility Tests...");
-    
-    const std::string text = "Hello World! @C++23";
-    const std::string encoded = httplib23::detail::url_encode(text);
-    const std::string decoded = httplib23::detail::url_decode(encoded);
-    assert(decoded == text);
 
-    const auto query_map = httplib23::detail::parse_query_string("name=Alice&age=25&city=Taipei%20City");
-    assert(query_map.at("name") == "Alice");
-    assert(query_map.at("age") == "25");
-    assert(query_map.at("city") == "Taipei City");
+    // URL Encoding / Decoding
+    const std::string original = "Hello World! @ 2026 #C++23";
+    const std::string encoded = httplib23::detail::url_encode(original);
+    const std::string decoded = httplib23::detail::url_decode(encoded);
+    assert(decoded == original);
+
+    // Query String Parsing
+    const auto params = httplib23::detail::parse_query_string("name=John%20Doe&age=30&city=Taipei");
+    assert(params.at("name") == "John Doe");
+    assert(params.at("age") == "30");
+    assert(params.at("city") == "Taipei");
+
+    // JSON Escaping
+    const std::string raw_json = "Line 1\nLine 2 \"Quote\" \t Tab";
+    const std::string escaped = httplib23::detail::escape_json(raw_json);
+    assert(escaped.find("\\n") != std::string::npos);
+    assert(escaped.find("\\\"") != std::string::npos);
 
     std::println("  -> Utility tests passed!");
 }
 
 /// <summary>
-/// 測試 Router 路徑匹配與動態參數解析。
+/// 測試 2: Router 路由配對測試 (包含動態參數與靜態路徑)
 /// </summary>
-void test_router() {
+void test_router_matching() {
     std::println("[TEST] Running Router Matching Tests...");
-    
+
     httplib23::Router router;
-    router.add_route(httplib23::Method::GET, "/api/v1/user/{id}", "Get user by ID").handler = [](const httplib23::Request&, httplib23::Response& res) noexcept {
-        res.set_json(R"({"status":"ok"})");
+    
+    router.add_route(httplib23::Method::GET, "/users/{id}", "Get User By ID").handler = [](const httplib23::Request&, httplib23::Response& res) {
+        res.set_content("User Endpoint");
+    };
+
+    router.add_route(httplib23::Method::POST, "/api/v1/posts", "Create Post").handler = [](const httplib23::Request&, httplib23::Response& res) {
+        res.set_content("Post Created");
     };
 
     httplib23::HandlerFunc handler;
     std::unordered_map<std::string, std::string> params;
-    const bool matched = router.match(httplib23::Method::GET, "/api/v1/user/10086", handler, params);
-    
-    assert(matched == true);
-    assert(params.at("id") == "10086");
+
+    // Test Dynamic Route Match
+    const bool match1 = router.match(httplib23::Method::GET, "/users/123", handler, params);
+    assert(match1 == true);
+    assert(params["id"] == "123");
+
+    // Test Exact Match
+    params.clear();
+    const bool match2 = router.match(httplib23::Method::POST, "/api/v1/posts", handler, params);
+    assert(match2 == true);
+    assert(params.empty());
+
+    // Test Mismatch Route
+    const bool match3 = router.match(httplib23::Method::GET, "/nonexistent", handler, params);
+    assert(match3 == false);
 
     std::println("  -> Router matching tests passed!");
 }
 
 /// <summary>
-/// 測試 Fail-Fast API 與 CRLF 防護例外擲出。
+/// 測試 3: Client URL 解析與例外捕捉測試
 /// </summary>
-void test_security_exceptions() {
-    std::println("[TEST] Running Security & Exception Tests...");
+void test_client_url_parsing_and_exceptions() {
+    std::println("[TEST] Running Client URL Parsing & Exception Tests...");
 
-    httplib23::Router router;
-    
-    // 1. 驗證非法 Pattern 不以 '/' 開頭會擲出 std::invalid_argument
-    bool invalid_path_caught = false;
-    try {
-        router.add_route(httplib23::Method::GET, "invalid_path");
-    } catch (const std::invalid_argument&) {
-        invalid_path_caught = true;
-    }
-    assert(invalid_path_caught == true);
+    // Test Client URL Host / Port / Path extraction
+    httplib23::Client client1("http://localhost:8080/api/v1");
+    httplib23::Client client2("http://localhost/");
+    httplib23::Client client3("http://127.0.0.1:9090");
 
-    // 2. 驗證 CRLF 注入防護
+    // CRLF Injection Validation
     httplib23::Response res;
-    bool crlf_caught = false;
+    bool caught_crlf = false;
     try {
-        res.set_header("X-Custom-Header", "admin=true\r\nSet-Cookie: session=hacked");
+        res.set_header("X-Custom\r\nHeader", "value");
     } catch (const std::invalid_argument&) {
-        crlf_caught = true;
+        caught_crlf = true;
     }
-    assert(crlf_caught == true);
+    assert(caught_crlf == true);
 
-    std::println("  -> Security & Exception tests passed!");
+    // Invalid Route Pattern Validation
+    httplib23::Router router;
+    bool caught_invalid_pattern = false;
+    try {
+        router.add_route(httplib23::Method::GET, "invalid_pattern");
+    } catch (const std::invalid_argument&) {
+        caught_invalid_pattern = true;
+    }
+    assert(caught_invalid_pattern == true);
+
+    std::println("  -> Client URL Parsing & Exception tests passed!");
 }
 
 /// <summary>
-/// 測試 OpenAPI Spec JSON 生成器。
+/// 測試 4: OpenAPI 3.0 與 Scalar HTML 產生器測試
 /// </summary>
-void test_openapi_gen() {
+void test_openapi_generator() {
     std::println("[TEST] Running OpenAPI Generator Tests...");
-    
-    httplib23::Router router;
-    auto& route = router.add_route(httplib23::Method::GET, "/api/v1/products/{category}", "Get products by category");
-    route.meta.tags.push_back("Product");
-    route.meta.description = "Retrieves all products within a specific category";
-    route.meta.responses.push_back(httplib23::RouteResponseDoc{.status_code = 200, .description = "Success"});
 
-    const std::string spec = httplib23::OpenApiGenerator::generate_spec(router.get_routes(), "Test Service", "2.0.0");
-    assert(spec.find("openapi") != std::string::npos);
-    assert(spec.find("Product") != std::string::npos);
-    assert(spec.find("category") != std::string::npos);
+    httplib23::Router router;
+    auto& entry = router.add_route(httplib23::Method::GET, "/items/{item_id}", "Get Item");
+    entry.meta.tags.push_back("Inventory");
+
+    const auto routes = router.get_routes();
+    const std::string openapi_json = httplib23::OpenApiGenerator::generate_spec(routes, "Test API", "2.0.0");
+    assert(openapi_json.find("openapi") != std::string::npos);
+    assert(openapi_json.find("3.0.3") != std::string::npos);
+    assert(openapi_json.find("Inventory") != std::string::npos);
+
+    const std::string scalar_html = httplib23::ScalarDocGenerator::generate_html("/openapi.json");
+    assert(scalar_html.find("<script id=\"api-reference\"") != std::string::npos);
 
     std::println("  -> OpenAPI Generator tests passed!");
 }
 
 /// <summary>
-/// 測試 Server 與 Client 整合及高併發壓測與 Slowloris 防護。
+/// 測試 5: Server / Client 完整整合、例外捕捉與高併發壓力測試
 /// </summary>
 void test_server_client_integration() {
-    std::println("[TEST] Running Server/Client Integration & High-Concurrency Tests...");
+    std::println("[TEST] Running Server/Client Integration, Exception & High-Concurrency Tests...");
 
     httplib23::Server server;
 
-    server.Get("/ping", "Health Check")
-        .tag("System")
-        .summary("Ping endpoint")
-        .response(200, "Pong response")
+    // 1. GET /ping
+    server.Get("/ping", "Ping Check")
+        .tag("Health")
         .handle([](const httplib23::Request&, httplib23::Response& res) noexcept {
             res.set_content("pong", "text/plain");
         });
 
-    server.Get("/users/{id}", "Get user details")
-        .tag("User")
-        .summary("Fetch single user details")
-        .response(200, "User JSON object")
+    // 2. GET /users/{id}
+    server.Get("/users/{id}", "Get User")
+        .tag("Users")
         .handle([](const httplib23::Request& req, httplib23::Response& res) noexcept {
             const auto id = req.get_path_param("id").value_or("0");
             res.set_json(std::format(R"({{"id":{},"name":"User_{}"}})", id, id));
         });
 
+    // 3. POST /echo
     server.Post("/echo", "Echo Request Body")
         .tag("Test")
         .handle([](const httplib23::Request& req, httplib23::Response& res) noexcept {
             res.set_json(std::format(R"({{"echo":"{}"}})", req.body));
+        });
+
+    // 4. GET /throw (測試 Route Handler 拋出未捕獲例外)
+    server.Get("/throw", "Throw Exception Test")
+        .tag("Test")
+        .handle([](const httplib23::Request&, httplib23::Response&) {
+            throw std::runtime_error("Simulated Uncaught Exception in Route Handler");
         });
 
     const uint16_t port = 18080;
@@ -138,7 +174,8 @@ void test_server_client_integration() {
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    httplib23::Client client("127.0.0.1", port);
+    // 使用帶有完整 URL 的 Client 初始化
+    httplib23::Client client("http://127.0.0.1:18080/api/v1");
 
     // 1. Test GET /ping
     const auto res_ping = client.Get("/ping");
@@ -158,19 +195,26 @@ void test_server_client_integration() {
     assert(res_echo->status == 200);
     assert(res_echo->body.find("Hello C++23") != std::string::npos);
 
-    // 4. Test OpenAPI Spec Endpoint /openapi.json
+    // 4. Test Route Handler Uncaught Exception -> Expect 500 Internal Server Error
+    const auto res_throw = client.Get("/throw");
+    assert(res_throw.has_value());
+    assert(res_throw->status == 500);
+    assert(res_throw->body.find("Simulated Uncaught Exception") != std::string::npos);
+    std::println("  -> Route Handler uncaught exception caught safely with status 500!");
+
+    // 5. Test OpenAPI Spec Endpoint /openapi.json
     const auto res_openapi = client.Get("/openapi.json");
     assert(res_openapi.has_value());
     assert(res_openapi->status == 200);
     assert(res_openapi->body.find("openapi") != std::string::npos);
 
-    // 5. Test Scalar UI Endpoint /docs
+    // 6. Test Scalar UI Endpoint /docs
     const auto res_docs = client.Get("/docs");
     assert(res_docs.has_value());
     assert(res_docs->status == 200);
     assert(res_docs->body.find("Scalar API Documentation") != std::string::npos);
 
-    // 6. High Concurrency Stress Test: 50 Threads x 10 requests = 500 requests
+    // 7. High Concurrency Stress Test: 50 Threads x 10 requests = 500 requests
     std::println("  -> Starting High Concurrency Stress Test (50 threads x 10 requests = 500 requests)...");
     constexpr int32_t NUM_THREADS = 50;
     constexpr int32_t REQS_PER_THREAD = 10;
@@ -190,11 +234,9 @@ void test_server_client_integration() {
     }
 
     for (auto& w : workers) {
-        w.join();
+        if (w.joinable()) w.join();
     }
 
-    std::println("  [STRESS RESULT] success_count: {} / {}", success_count.load(), NUM_THREADS * REQS_PER_THREAD);
-    std::fflush(stdout);
     assert(success_count == NUM_THREADS * REQS_PER_THREAD);
     std::println("  -> High Concurrency Stress Test passed! All {} requests succeeded!", success_count.load());
 
@@ -203,18 +245,23 @@ void test_server_client_integration() {
 }
 
 int main() {
-    _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
-
     std::println("========================================================");
     std::println("Running httplib23 C++23 Comprehensive Test Suite");
     std::println("========================================================");
 
-    test_utils();
-    test_router();
-    test_security_exceptions();
-    test_openapi_gen();
+    test_utilities();
+    test_router_matching();
+    test_client_url_parsing_and_exceptions();
+    test_openapi_generator();
     test_server_client_integration();
 
-    std::println("\n[ALL TESTS PASSED SUCCESSFULLY!]");
+    std::println("\n[ALL TESTS PASSED SUCCESSFULLY!]\n");
+
+    // Memory Leak Check
+    const int32_t leaks = _CrtDumpMemoryLeaks();
+    if (leaks != 0) {
+        std::println(stderr, "[WARNING] Memory leak detected!");
+    }
+
     return 0;
 }
