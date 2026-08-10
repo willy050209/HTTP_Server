@@ -1,7 +1,7 @@
 // filepath: src/test_runner.cpp
 #define _CRTDBG_MAP_ALLOC
 #include <crtdbg.h>
-#include <iostream>
+#include <print>
 #include <cassert>
 #include <thread>
 #include <vector>
@@ -14,7 +14,7 @@
 /// 測試 Utility 純函數（URL 解碼、編碼與 Query 解析）。
 /// </summary>
 void test_utils() {
-    std::cout << "[TEST] Running Utility Tests...\n";
+    std::println("[TEST] Running Utility Tests...");
     
     const std::string text = "Hello World! @C++23";
     const std::string encoded = httplib23::detail::url_encode(text);
@@ -26,14 +26,14 @@ void test_utils() {
     assert(query_map.at("age") == "25");
     assert(query_map.at("city") == "Taipei City");
 
-    std::cout << "  -> Utility tests passed!\n";
+    std::println("  -> Utility tests passed!");
 }
 
 /// <summary>
 /// 測試 Router 路徑匹配與動態參數解析。
 /// </summary>
 void test_router() {
-    std::cout << "[TEST] Running Router Matching Tests...\n";
+    std::println("[TEST] Running Router Matching Tests...");
     
     httplib23::Router router;
     router.add_route(httplib23::Method::GET, "/api/v1/user/{id}", "Get user by ID").handler = [](const httplib23::Request&, httplib23::Response& res) noexcept {
@@ -47,18 +47,17 @@ void test_router() {
     assert(matched == true);
     assert(params.at("id") == "10086");
 
-    std::cout << "  -> Router matching tests passed!\n";
+    std::println("  -> Router matching tests passed!");
 }
 
 /// <summary>
 /// 測試 Fail-Fast API 傳入非法參數的例外擲出。
 /// </summary>
 void test_fail_fast_exceptions() {
-    std::cout << "[TEST] Running Fail-Fast Exception Tests...\n";
+    std::println("[TEST] Running Fail-Fast Exception Tests...");
 
     httplib23::Router router;
     
-    // 驗證非法 Pattern 不以 '/' 開頭會擲出 std::invalid_argument
     bool exception_caught = false;
     try {
         router.add_route(httplib23::Method::GET, "invalid_path");
@@ -67,14 +66,14 @@ void test_fail_fast_exceptions() {
     }
     assert(exception_caught == true);
 
-    std::cout << "  -> Fail-Fast exception tests passed!\n";
+    std::println("  -> Fail-Fast exception tests passed!");
 }
 
 /// <summary>
 /// 測試 OpenAPI Spec JSON 生成器。
 /// </summary>
 void test_openapi_gen() {
-    std::cout << "[TEST] Running OpenAPI Generator Tests...\n";
+    std::println("[TEST] Running OpenAPI Generator Tests...");
     
     httplib23::Router router;
     auto& route = router.add_route(httplib23::Method::GET, "/api/v1/products/{category}", "Get products by category");
@@ -87,14 +86,14 @@ void test_openapi_gen() {
     assert(spec.find("Product") != std::string::npos);
     assert(spec.find("category") != std::string::npos);
 
-    std::cout << "  -> OpenAPI Generator tests passed!\n";
+    std::println("  -> OpenAPI Generator tests passed!");
 }
 
 /// <summary>
 /// 測試 Server 與 Client 整合及高併發壓測。
 /// </summary>
 void test_server_client_integration() {
-    std::cout << "[TEST] Running Server/Client Integration & High-Concurrency Tests...\n";
+    std::println("[TEST] Running Server/Client Integration & High-Concurrency Tests...");
 
     httplib23::Server server;
 
@@ -124,7 +123,7 @@ void test_server_client_integration() {
     const uint16_t port = 18080;
     const bool started = server.listen("127.0.0.1", port);
     assert(started == true);
-    std::cout << "  -> Server started on port " << port << "\n";
+    std::println("  -> Server started on port {}", port);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
@@ -161,7 +160,7 @@ void test_server_client_integration() {
     assert(res_docs->body.find("Scalar API Documentation") != std::string::npos);
 
     // 6. High Concurrency Stress Test: 50 Threads x 10 requests = 500 requests
-    std::cout << "  -> Starting High Concurrency Stress Test (50 threads x 10 requests = 500 requests)...\n";
+    std::println("  -> Starting High Concurrency Stress Test (50 threads x 10 requests = 500 requests)...");
     constexpr int32_t NUM_THREADS = 50;
     constexpr int32_t REQS_PER_THREAD = 10;
     std::atomic<int32_t> success_count{0};
@@ -184,18 +183,18 @@ void test_server_client_integration() {
     }
 
     assert(success_count == NUM_THREADS * REQS_PER_THREAD);
-    std::cout << "  -> High Concurrency Stress Test passed! All " << success_count << " requests succeeded!\n";
+    std::println("  -> High Concurrency Stress Test passed! All {} requests succeeded!", success_count.load());
 
     server.stop();
-    std::cout << "  -> Server stopped gracefully.\n";
+    std::println("  -> Server stopped gracefully.");
 }
 
 int main() {
     _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
 
-    std::cout << "========================================================\n";
-    std::cout << "Running httplib23 C++23 Comprehensive Test Suite\n";
-    std::cout << "========================================================\n";
+    std::println("========================================================");
+    std::println("Running httplib23 C++23 Comprehensive Test Suite");
+    std::println("========================================================");
 
     test_utils();
     test_router();
@@ -203,6 +202,6 @@ int main() {
     test_openapi_gen();
     test_server_client_integration();
 
-    std::cout << "\n[ALL TESTS PASSED SUCCESSFULLY!]\n";
+    std::println("\n[ALL TESTS PASSED SUCCESSFULLY!]");
     return 0;
 }
