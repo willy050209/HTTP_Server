@@ -1,5 +1,4 @@
 // filepath: example/multi_port_server.cpp
-#include <print>
 #include <iostream>
 #include <cstdint>
 #include <chrono>
@@ -54,29 +53,29 @@ int main() {
     const uint16_t port_hello = 8080;
     const uint16_t port_time = 8081;
 
-    std::println("========================================================");
-    std::println("Starting httplib23 Multi-Port HTTP Servers:");
-    std::println(" 1. Hello World Server : http://127.0.0.1:{}", port_hello);
-    std::println("    - Interactive Docs  : http://127.0.0.1:{}/docs", port_hello);
-    std::println(" 2. System Time Server : http://127.0.0.1:{}", port_time);
-    std::println("    - Interactive Docs  : http://127.0.0.1:{}/docs", port_time);
-    std::println("========================================================");
+    httplib23::log_info("========================================================");
+    httplib23::log_info("Starting httplib23 Multi-Port HTTP Servers:");
+    httplib23::log_info(" 1. Hello World Server : http://127.0.0.1:{}", port_hello);
+    httplib23::log_info("    - Swagger UI Docs   : http://127.0.0.1:{}/docs", port_hello);
+    httplib23::log_info(" 2. System Time Server : http://127.0.0.1:{}", port_time);
+    httplib23::log_info("    - Swagger UI Docs   : http://127.0.0.1:{}/docs", port_time);
+    httplib23::log_info("========================================================");
 
     // 在獨立執行緒啟動第一台 Server (Port 8080)
     std::thread thread_hello([&server_hello, port_hello]() {
         if (!server_hello.listen("127.0.0.1", port_hello)) {
-            std::println(stderr, "[ERROR] Failed to start Hello World Server on port {}", port_hello);
+            httplib23::log_error("Failed to start Hello World Server on port {}", port_hello);
         }
     });
 
     // 在獨立執行緒啟動第二台 Server (Port 8081)
     std::thread thread_time([&server_time, port_time]() {
         if (!server_time.listen("127.0.0.1", port_time)) {
-            std::println(stderr, "[ERROR] Failed to start System Time Server on port {}", port_time);
+            httplib23::log_error("Failed to start System Time Server on port {}", port_time);
         }
     });
 
-    std::println("Servers are running! Press Enter to stop...");
+    httplib23::log_info("Servers are running! Press Enter to stop...");
     std::cin.get();
 
     // 關閉伺服器並等待執行緒回歸
@@ -86,6 +85,6 @@ int main() {
     if (thread_hello.joinable()) thread_hello.join();
     if (thread_time.joinable()) thread_time.join();
 
-    std::println("Servers shut down gracefully.");
+    httplib23::log_info("Servers shut down gracefully.");
     return 0;
 }

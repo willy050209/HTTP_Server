@@ -1,5 +1,4 @@
 // filepath: main.cpp
-#include <print>
 #include <iostream>
 #include <cstdint>
 #include <format>
@@ -43,18 +42,20 @@ int main() {
         });
 
     const uint16_t port = 8080;
-    std::println("========================================================");
-    std::println("Starting httplib23 HTTP Server on http://127.0.0.1:{}", port);
-    std::println(" - Interactive Scalar API Docs: http://127.0.0.1:{}/docs", port);
-    std::println(" - OpenAPI 3.0 Specification:  http://127.0.0.1:{}/openapi.json", port);
-    std::println("========================================================");
+    httplib23::log_info("========================================================");
+    httplib23::log_info("Starting httplib23 HTTP Server on http://127.0.0.1:{}", port);
+    httplib23::log_info(" - Swagger UI API Docs:       http://127.0.0.1:{}/docs", port);
+    httplib23::log_info(" - Scalar UI API Docs:        http://127.0.0.1:{}/scalar", port);
+    httplib23::log_info(" - OpenAPI 3.0 Specification: http://127.0.0.1:{}/openapi.json", port);
+    httplib23::log_info("========================================================");
 
     if (server.listen("127.0.0.1", port)) {
-        std::println("Server is running! Press Enter to stop...");
+        httplib23::log_info("Server is running! Press Enter to stop...");
         std::cin.get();
         server.stop();
+        httplib23::log_info("Server stopped gracefully.");
     } else {
-        std::println(stderr, "Failed to start server on port {}", port);
+        httplib23::log_error("Failed to start server on port {}", port);
         return 1;
     }
 
