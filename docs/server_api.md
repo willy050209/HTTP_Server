@@ -20,14 +20,16 @@ server.stop();
 
 ## API 文件產生與控制 (API Documentation Configuration)
 
-`httplib23::Server` 內建自動產生的 **Swagger UI** (`/docs`)、**Scalar UI** (`/scalar`) 與 **OpenAPI 3.0 Spec** (`/openapi.json`)：
+`httplib23::Server` 內建自動產生的 **Swagger UI** (`/docs`)、**Scalar UI** (`/scalar`) 與 **OpenAPI 3.0 Spec** (`/openapi.json`)，支援全域或單獨開關控制：
 
 ```cpp
 httplib23::Server server;
 
-// 1. 設定自訂文件路徑與標題
+// 1. 設定自訂文件路徑、單獨開啟/關閉 Swagger UI 與 Scalar UI
 server.set_doc_options({
     .enabled = true,
+    .enable_swagger = true,       // 是否單獨啟用 Swagger UI
+    .enable_scalar = true,        // 是否單獨啟用 Scalar UI
     .openapi_path = "/openapi.json",
     .swagger_path = "/docs",      // Swagger UI 預設位址 /docs
     .scalar_path = "/scalar",     // Scalar UI 預設位址 /scalar
@@ -35,7 +37,11 @@ server.set_doc_options({
     .version = "1.0.0"
 });
 
-// 2. 在生產環境停用 API 文件端點
+// 2. 流暢 API 單獨控制 Swagger UI 或 Scalar UI
+server.enable_swagger(true)   // 單獨開啟/關閉 Swagger UI
+      .enable_scalar(false);  // 單獨開啟/關閉 Scalar UI
+
+// 3. 在生產環境全域關閉 API 文件端點
 server.enable_docs(false);
 ```
 

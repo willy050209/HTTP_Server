@@ -17,14 +17,14 @@
   - **`/docs`**: 預設嵌入 **Swagger UI** 互動式線上測試與文件網頁 (路徑可自訂)。
   - **`/scalar`**: 預設嵌入 **Scalar UI** (`@scalar/api-reference`) 現代化網頁介面 (路徑可自訂)。
   - **`/openapi.json`**: 自動將註冊之 Routes 轉換為規範的 OpenAPI 3.0.3 Spec JSON (路徑可自訂)。
-  - **自由開關 (`enable_docs`)**: 支援一鍵開啟或關閉 API 文件生成 (適合生產環境關閉以保安全)。
+  - **靈活單獨開關**: 支援全域 (`enable_docs`) 或單獨開啟/關閉 Swagger UI (`enable_swagger`) 與 Scalar UI (`enable_scalar`)。
 - 🌐 **全功能 HTTP Server & Client**: 支援 `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `OPTIONS`, `HEAD` 請求、動態路徑參數 (`/users/{id}`)、Query String 解析與 Middleware 擴充。
 
 ---
 
 ## 快速開始 (Quick Start)
 
-### 1. HTTP Server 範例 (含文件自訂與開關設定)
+### 1. HTTP Server 範例 (含文件單獨開關與自訂設定)
 
 ```cpp
 #include <print>
@@ -33,15 +33,20 @@
 int main() {
     httplib23::Server server;
 
-    // 配置 API 文件選項 (可開關或自訂路徑)
+    // 配置 API 文件選項 (支援單獨開啟/關閉 Swagger UI 或 Scalar UI)
     server.set_doc_options({
         .enabled = true,
+        .enable_swagger = true,       // 啟用 Swagger UI
+        .enable_scalar = true,        // 啟用 Scalar UI
         .openapi_path = "/openapi.json",
-        .swagger_path = "/docs",      // Swagger UI 預設位址
-        .scalar_path = "/scalar",     // Scalar UI 預設位址
+        .swagger_path = "/docs",      // Swagger UI 存取路徑
+        .scalar_path = "/scalar",     // Scalar UI 存取路徑
         .title = "My Modern C++23 API",
         .version = "1.0.0"
     });
+
+    // 亦可使用方便的流暢 API 單獨開關：
+    // server.enable_swagger(true).enable_scalar(false);
 
     // 定義 GET API 並加入 OpenAPI 文件元資料 (Fluent API)
     server.Get("/api/v1/users/{id}", "取得用戶詳情")
@@ -120,4 +125,4 @@ build_and_test.bat
 
 ## 授權 (License)
 
-本專案採用 MIT License 授權。
+本專案採用 [MIT License](LICENSE) 授權。

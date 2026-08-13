@@ -1,6 +1,6 @@
 # OpenAPI 3.0, Swagger UI & Scalar UI 整合說明 (API Documentation Options)
 
-`httplib23` 內建自動化 OpenAPI 規範產生器，並同時整合 **Swagger UI** 與 **Scalar API Reference** 雙線上互動式文件介面，支援自由開啟/關閉與自訂路由位址。
+`httplib23` 內建自動化 OpenAPI 規範產生器，並同時整合 **Swagger UI** 與 **Scalar API Reference** 雙線上互動式文件介面，支援獨立/單獨啟用與自訂路由位址。
 
 ---
 
@@ -17,22 +17,38 @@
 
 ---
 
-## 設定與控制 API 文件 (DocOptions & enable_docs)
+## 控制 API 文件 (DocOptions, enable_swagger & enable_scalar)
 
-您可以透過 `server.set_doc_options(...)` 或 `server.enable_docs(...)` 自訂 API 文件的生成與路由位址：
+您可以透過 `server.set_doc_options(...)` 或流暢 API 方法自由控制 API 文件的生成、單獨啟用與路由位址：
 
-### 1. 一鍵關閉 API 文件 (適用於生產環境)
+### 1. 單獨開啟 / 關閉 Swagger UI 或 Scalar UI
 
-在正式上線生產環境中，基於資安考量可隨時停用文件端點：
+若您只希望提供 **Swagger UI** 或只希望提供 **Scalar UI**，可以使用單獨控制方法：
 
 ```cpp
 httplib23::Server server;
 
-// 停用 API 文件生成 (不會註冊 /docs, /scalar, /openapi.json)
+// 僅啟用 Swagger UI (關閉 Scalar UI)
+server.enable_swagger(true)
+      .enable_scalar(false);
+
+// 僅啟用 Scalar UI (關閉 Swagger UI)
+server.enable_swagger(false)
+      .enable_scalar(true);
+```
+
+### 2. 全域一鍵關閉 API 文件 (適用於生產環境)
+
+在正式上線生產環境中，基於資安考量可隨時一鍵停用所有文件端點：
+
+```cpp
+httplib23::Server server;
+
+// 停用所有 API 文件生成 (不會註冊 /docs, /scalar, /openapi.json)
 server.enable_docs(false);
 ```
 
-### 2. 自訂 API 文件路由與標題
+### 3. 自訂 API 文件路由與標題
 
 使用者可隨意調整 Swagger UI、Scalar UI 或 OpenAPI spec 的存取路徑：
 
@@ -40,10 +56,12 @@ server.enable_docs(false);
 httplib23::Server server;
 
 server.set_doc_options({
-    .enabled = true,
+    .enabled = true,                     // 是否啟用文件服務
+    .enable_swagger = true,              // 是否單獨啟用 Swagger UI
+    .enable_scalar = false,              // 是否單獨啟用 Scalar UI
     .openapi_path = "/api-spec.json",    // 自訂 OpenAPI Spec JSON 位址
-    .swagger_path = "/docs",            // 自訂 Swagger UI 位址 (預設 /docs)
-    .scalar_path = "/scalar-docs",      // 自訂 Scalar UI 位址 (預設 /scalar)
+    .swagger_path = "/swagger-docs",     // 自訂 Swagger UI 位址 (預設 /docs)
+    .scalar_path = "/scalar-docs",       // 自訂 Scalar UI 位址 (預設 /scalar)
     .title = "企業級微服務 API 文件",
     .version = "2.1.0"
 });
