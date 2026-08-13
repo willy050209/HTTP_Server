@@ -18,6 +18,29 @@ server.stop();
 
 ---
 
+## API 文件產生與控制 (API Documentation Configuration)
+
+`httplib23::Server` 內建自動產生的 **Swagger UI** (`/docs`)、**Scalar UI** (`/scalar`) 與 **OpenAPI 3.0 Spec** (`/openapi.json`)：
+
+```cpp
+httplib23::Server server;
+
+// 1. 設定自訂文件路徑與標題
+server.set_doc_options({
+    .enabled = true,
+    .openapi_path = "/openapi.json",
+    .swagger_path = "/docs",      // Swagger UI 預設位址 /docs
+    .scalar_path = "/scalar",     // Scalar UI 預設位址 /scalar
+    .title = "系統 API 文件",
+    .version = "1.0.0"
+});
+
+// 2. 在生產環境停用 API 文件端點
+server.enable_docs(false);
+```
+
+---
+
 ## 路由定義 (Routing & HTTP Methods)
 
 支援常用 HTTP 動詞：`Get`, `Post`, `Put`, `Delete`, `Patch`, `Options`, `Head`。
@@ -90,7 +113,7 @@ server.Get("/users/{id}/posts/{post_id}", "取得用戶文章")
 | :--- | :--- |
 | `set_content(body, content_type)` | 設定回應 Body 與 Content-Type |
 | `set_json(json_str)` | 設定 JSON 回應 (自動將 Content-Type 設為 `application/json`) |
-| `set_header(key, value)` | 設定自訂 Response Header |
+| `set_header(key, value)` | 設定自訂 Response Header (含 CRLF 注入防護) |
 | `set_redirect(url, status_code)` | 設定重導向 HTTP 回應 |
 | `status` (變數) | HTTP 狀態碼 (預設為 `200`) |
 

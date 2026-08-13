@@ -166,13 +166,13 @@ enum class Method : uint8_t {
 /// <param name="str">HTTP 動詞字串。</param>
 /// <returns>Method 列舉值。</returns>
 [[nodiscard]] inline constexpr Method string_to_method(const std::string_view str) noexcept {
-    if (str == "GET") return Method::GET;
-    if (str == "POST") return Method::POST;
-    if (str == "PUT") return Method::PUT;
-    if (str == "DELETE") return Method::DELETE;
-    if (str == "PATCH") return Method::PATCH;
-    if (str == "OPTIONS") return Method::OPTIONS;
-    if (str == "HEAD") return Method::HEAD;
+    if (str == "GET")       return Method::GET;
+    if (str == "POST")      return Method::POST;
+    if (str == "PUT")       return Method::PUT;
+    if (str == "DELETE")    return Method::DELETE;
+    if (str == "PATCH")     return Method::PATCH;
+    if (str == "OPTIONS")   return Method::OPTIONS;
+    if (str == "HEAD")      return Method::HEAD;
     return Method::UNKNOWN;
 }
 
@@ -791,6 +791,41 @@ public:
 };
 
 /// <summary>
+/// Swagger UI HTML 文件產生器。
+/// </summary>
+class SwaggerDocGenerator {
+public:
+    [[nodiscard]] static std::string generate_html(const std::string_view openapi_url = "/openapi.json", const std::string_view title = "Swagger UI") noexcept {
+        return std::format(R"(<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css" />
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    window.onload = () => {{
+      window.ui = SwaggerUIBundle({{
+        url: '{}',
+        dom_id: '#swagger-ui',
+        deepLinking: true,
+        presets: [
+          SwaggerUIBundle.presets.apis,
+          SwaggerUIBundle.SwaggerUIStandalonePreset
+        ],
+      }});
+    }};
+  </script>
+</body>
+</html>)", title, openapi_url);
+    }
+};
+
+/// <summary>
 /// Scalar API Reference HTML 文件產生器。
 /// </summary>
 class ScalarDocGenerator {
@@ -812,6 +847,18 @@ public:
 </body>
 </html>)", title, openapi_url);
     }
+};
+
+/// <summary>
+/// API 文件生成選項配置結構體。
+/// </summary>
+struct DocOptions {
+    bool enabled = true;
+    std::string openapi_path = "/openapi.json";
+    std::string swagger_path = "/docs";
+    std::string scalar_path = "/scalar";
+    std::string title = "httplib23 API Documentation";
+    std::string version = "1.0.0";
 };
 
 // ============================================================================
@@ -932,6 +979,7 @@ private:
     std::thread m_accept_thread;
     std::thread m_watchdog_thread;
     std::vector<std::thread> m_iocp_threads;
+    DocOptions m_doc_options;
 
     std::mutex m_session_mutex;
     std::unordered_map<SOCKET, std::shared_ptr<ConnectionSession>> m_sessions;
@@ -960,6 +1008,29 @@ public:
     ~Server() {
         stop();
         WSACleanup();
+    }
+
+    /// <summary>
+    /// 設定 API 文件生成與路由選項（可開啟/關閉文件、自訂 Swagger UI 與 Scalar UI 路徑）。
+    /// </summary>
+    Server& set_doc_options(DocOptions options) noexcept {
+        m_doc_options = std::move(options);
+        return *this;
+    }
+
+    /// <summary>
+    /// 設定是否啟用 API 文件生成。
+    /// </summary>
+    Server& enable_docs(const bool enable = true) noexcept {
+        m_doc_options.enabled = enable;
+        return *this;
+    }
+
+    /// <summary>
+    /// 獲取目前 API 文件配置選項。
+    /// </summary>
+    [[nodiscard]] const DocOptions& get_doc_options() const noexcept {
+        return m_doc_options;
     }
 
     FluentRoute Get(std::string path, std::string summary = "") {
@@ -1005,13 +1076,31 @@ public:
     }
 
     bool listen(const std::string& host, const uint16_t port) {
-        m_router.add_route(Method::GET, "/openapi.json", "Get OpenAPI 3.0 JSON Specification").handler = [this](const Request&, Response& res) {
-            res.set_json(OpenApiGenerator::generate_spec(m_router.get_routes()));
-        };
+        if (m_doc_options.enabled) {
+            if (!m_doc_options.openapi_path.empty()) {
+                const std::string title = m_doc_options.title;
+                const std::string version = m_doc_options.version;
+                m_router.add_route(Method::GET, m_doc_options.openapi_path, "Get OpenAPI 3.0 JSON Specification").handler = [this, title, version](const Request&, Response& res) {
+                    res.set_json(OpenApiGenerator::generate_spec(m_router.get_routes(), title, version));
+                };
+            }
 
-        m_router.add_route(Method::GET, "/docs", "Interactive Scalar API Documentation").handler = [](const Request&, Response& res) {
-            res.set_content(ScalarDocGenerator::generate_html("/openapi.json"), "text/html; charset=utf-8");
-        };
+            if (!m_doc_options.swagger_path.empty() && !m_doc_options.openapi_path.empty()) {
+                const std::string openapi_url = m_doc_options.openapi_path;
+                const std::string title = m_doc_options.title + " - Swagger UI";
+                m_router.add_route(Method::GET, m_doc_options.swagger_path, "Interactive Swagger API Documentation").handler = [openapi_url, title](const Request&, Response& res) {
+                    res.set_content(SwaggerDocGenerator::generate_html(openapi_url, title), "text/html; charset=utf-8");
+                };
+            }
+
+            if (!m_doc_options.scalar_path.empty() && !m_doc_options.openapi_path.empty()) {
+                const std::string openapi_url = m_doc_options.openapi_path;
+                const std::string title = m_doc_options.title + " - Scalar UI";
+                m_router.add_route(Method::GET, m_doc_options.scalar_path, "Interactive Scalar API Documentation").handler = [openapi_url, title](const Request&, Response& res) {
+                    res.set_content(ScalarDocGenerator::generate_html(openapi_url, title), "text/html; charset=utf-8");
+                };
+            }
+        }
 
         m_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
         if (m_iocp == NULL) return false;
@@ -1494,10 +1583,10 @@ public:
     }
 
     [[nodiscard]] std::expected<Response, std::string> send_request(const Method method, const std::string_view path, const std::string_view body = "", const std::string_view content_type = "", const HeaderMap& custom_headers = {}) noexcept {
-        for (int32_t attempt = 0; attempt < 5; ++attempt) {
+        for (int32_t attempt = 0; attempt < 10; ++attempt) {
             auto res = send_request_once(method, path, body, content_type, custom_headers);
             if (res.has_value()) return res;
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         return std::unexpected("Failed to receive response after retries");
     }
@@ -1524,7 +1613,7 @@ private:
         }
 
         bool connected = false;
-        for (int32_t retry = 0; retry < 5; ++retry) {
+        for (int32_t retry = 0; retry < 10; ++retry) {
             if (connect(sock, res->ai_addr, static_cast<int32_t>(res->ai_addrlen)) != SOCKET_ERROR) {
                 connected = true;
                 break;

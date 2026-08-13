@@ -208,11 +208,17 @@ void test_server_client_integration() {
     assert(res_openapi->status == 200);
     assert(res_openapi->body.find("openapi") != std::string::npos);
 
-    // 6. Test Scalar UI Endpoint /docs
-    const auto res_docs = client.Get("/docs");
-    assert(res_docs.has_value());
-    assert(res_docs->status == 200);
-    assert(res_docs->body.find("Scalar API Documentation") != std::string::npos);
+    // 6. Test Swagger UI Endpoint /docs (Default path)
+    const auto res_swagger = client.Get("/docs");
+    assert(res_swagger.has_value());
+    assert(res_swagger->status == 200);
+    assert(res_swagger->body.find("swagger-ui") != std::string::npos);
+
+    // 7. Test Scalar UI Endpoint /scalar (Default path)
+    const auto res_scalar = client.Get("/scalar");
+    assert(res_scalar.has_value());
+    assert(res_scalar->status == 200);
+    assert(res_scalar->body.find("api-reference") != std::string::npos);
 
     // 7. High Concurrency Stress Test: 50 Threads x 10 requests = 500 requests
     std::println("  -> Starting High Concurrency Stress Test (50 threads x 10 requests = 500 requests)...");
@@ -229,6 +235,7 @@ void test_server_client_integration() {
                 if (res.has_value() && res->status == 200 && res->body == "pong") {
                     success_count++;
                 }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
         });
     }
@@ -244,6 +251,68 @@ void test_server_client_integration() {
     std::println("  -> Server stopped gracefully.");
 }
 
+/// <summary>
+/// 測試 6: API 文件啟用/停用與自訂路徑測試 (Swagger UI / Scalar UI / OpenAPI Spec)
+/// </summary>
+void test_doc_configuration() {
+    std::println("[TEST] Running API Documentation Configuration Tests...");
+
+    // 1. 測試關閉 API 文件功能 (enable_docs(false))
+    {
+        httplib23::Server server;
+        server.enable_docs(false);
+        server.Get("/ping").handle([](const httplib23::Request&, httplib23::Response& res) {
+            res.set_content("pong");
+        });
+
+        const uint16_t port = 18081;
+        assert(server.listen("127.0.0.1", port) == true);
+
+        httplib23::Client client("127.0.0.1", port);
+        assert(client.Get("/ping")->status == 200);
+        assert(client.Get("/docs")->status == 404);
+        assert(client.Get("/scalar")->status == 404);
+        assert(client.Get("/openapi.json")->status == 404);
+
+        server.stop();
+    }
+
+    // 2. 測試自訂路徑 (set_doc_options)
+    {
+        httplib23::Server server;
+        httplib23::DocOptions opts{
+            .enabled = true,
+            .openapi_path = "/custom-spec.json",
+            .swagger_path = "/custom-swagger",
+            .scalar_path = "/custom-scalar",
+            .title = "Custom Title API",
+            .version = "3.0.0"
+        };
+        server.set_doc_options(opts);
+
+        const uint16_t port = 18082;
+        assert(server.listen("127.0.0.1", port) == true);
+
+        httplib23::Client client("127.0.0.1", port);
+
+        const auto res_swagger = client.Get("/custom-swagger");
+        assert(res_swagger.has_value() && res_swagger->status == 200);
+        assert(res_swagger->body.find("swagger-ui") != std::string::npos);
+
+        const auto res_scalar = client.Get("/custom-scalar");
+        assert(res_scalar.has_value() && res_scalar->status == 200);
+        assert(res_scalar->body.find("api-reference") != std::string::npos);
+
+        const auto res_spec = client.Get("/custom-spec.json");
+        assert(res_spec.has_value() && res_spec->status == 200);
+        assert(res_spec->body.find("Custom Title API") != std::string::npos);
+
+        server.stop();
+    }
+
+    std::println("  -> API Documentation configuration tests passed!");
+}
+
 int main() {
     std::println("========================================================");
     std::println("Running httplib23 C++23 Comprehensive Test Suite");
@@ -254,6 +323,7 @@ int main() {
     test_client_url_parsing_and_exceptions();
     test_openapi_generator();
     test_server_client_integration();
+    test_doc_configuration();
 
     std::println("\n[ALL TESTS PASSED SUCCESSFULLY!]\n");
 

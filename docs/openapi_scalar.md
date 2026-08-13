@@ -1,21 +1,57 @@
-# OpenAPI 3.0 & Scalar UI 整合說明 (OpenAPI & Scalar Documentation)
+# OpenAPI 3.0, Swagger UI & Scalar UI 整合說明 (API Documentation Options)
 
-`httplib23` 內建自動化 OpenAPI 規範產生器與整合 **Scalar API Reference** 的線上文件網頁介面。
+`httplib23` 內建自動化 OpenAPI 規範產生器，並同時整合 **Swagger UI** 與 **Scalar API Reference** 雙線上互動式文件介面，支援自由開啟/關閉與自訂路由位址。
 
 ---
 
-## 自動產生的內建 Endpoints
+## 預設內建 Endpoints
 
-當啟動 `httplib23::Server` 時，系統會自動幫您註冊以下兩個標準路由（您無需手動手寫註冊）：
+當啟動 `httplib23::Server` 時，若未特別關閉 API 文件生成，系統預設會自動註冊以下三個標準路由：
 
-1. **`/openapi.json`**:
+1. **`/docs`** (Swagger UI):
+   - 傳回嵌入 **Swagger UI** 官方前端介面的 HTML，提供業界標準的互動式測試與 API 測試工具。
+2. **`/scalar`** (Scalar UI):
+   - 傳回嵌入 **Scalar UI** (`@scalar/api-reference`) 的現代化視覺介面，提供優雅的視圖與範例程式碼。
+3. **`/openapi.json`**:
    - 傳回根據所有動態與靜態註冊路由自動產生的符合 **OpenAPI 3.0.3 Specification** 規範的 JSON 規格內容。
-2. **`/docs`**:
-   - 傳回嵌入 **Scalar UI** (`@scalar/api-reference`) 的 HTML 介面，網頁自動載入 `/openapi.json` 並顯示互動式測試介面。
 
 ---
 
-## 搭配 Fluent API 標註 API 文件
+## 設定與控制 API 文件 (DocOptions & enable_docs)
+
+您可以透過 `server.set_doc_options(...)` 或 `server.enable_docs(...)` 自訂 API 文件的生成與路由位址：
+
+### 1. 一鍵關閉 API 文件 (適用於生產環境)
+
+在正式上線生產環境中，基於資安考量可隨時停用文件端點：
+
+```cpp
+httplib23::Server server;
+
+// 停用 API 文件生成 (不會註冊 /docs, /scalar, /openapi.json)
+server.enable_docs(false);
+```
+
+### 2. 自訂 API 文件路由與標題
+
+使用者可隨意調整 Swagger UI、Scalar UI 或 OpenAPI spec 的存取路徑：
+
+```cpp
+httplib23::Server server;
+
+server.set_doc_options({
+    .enabled = true,
+    .openapi_path = "/api-spec.json",    // 自訂 OpenAPI Spec JSON 位址
+    .swagger_path = "/docs",            // 自訂 Swagger UI 位址 (預設 /docs)
+    .scalar_path = "/scalar-docs",      // 自訂 Scalar UI 位址 (預設 /scalar)
+    .title = "企業級微服務 API 文件",
+    .version = "2.1.0"
+});
+```
+
+---
+
+## 搭配 Fluent API 標註 API 文件元資料
 
 您可以透過 `server.Get(...)`, `server.Post(...)` 傳回的 `FluentRoute` 鏈式物件，設定各個 API 的詳細資訊：
 
@@ -37,8 +73,8 @@ server.Post("/api/v1/products", "建立新商品")
 
 ## 在瀏覽器中預覽
 
-啟動 Server 後，在瀏覽器打開 `http://127.0.0.1:8080/docs`，即可看到專屬且具備 Modern 視覺設計的 **Scalar API Reference** 介面：
+啟動 Server 後，您可以在瀏覽器開啟：
 
-- 檢視所有 API 的分類 (Tags) 與路徑結構
-- 測試 HTTP 請求發送 (Try it out)
-- 檢視產生的範例 Request / Response Schema
+- **Swagger UI**: `http://127.0.0.1:8080/docs`
+- **Scalar UI**: `http://127.0.0.1:8080/scalar`
+- **OpenAPI 3.0 Spec JSON**: `http://127.0.0.1:8080/openapi.json`

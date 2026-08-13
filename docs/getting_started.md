@@ -1,56 +1,82 @@
-# 快速入門與建置指南 (Getting Started)
+# 快速入門與建置指南 (Getting Started & Build Guide)
 
-本指南說明如何將 `httplib23.hpp` 整合至專案中，以及如何使用 MSVC 進行 C++23 環境編譯。
+歡迎使用 `httplib23`！本文檔將引導您如何在專案中引入 `httplib23` 並建置第一個 C++23 HTTP 服務。
 
 ---
 
 ## 系統需求 (Prerequisites)
 
-- **作業系統**: Windows 10 / Windows 11 / Windows Server
-- **編譯器**: MSVC (Microsoft Visual C++) 2022 / 2026 或以上，需支援 C++23 (`/std:c++latest` 或 `/std:c++23`)
-- **SDK**: Windows SDK (提供 Winsock2 / `ws2_32.lib`)
+- **作業系統**: Windows 10 / 11 / Server (相容原生 IOCP 與 WinSock2)
+- **編譯器**: MSVC (Microsoft Visual C++ Optimizing Compiler Version 19.38+) 或 VS 2022 / VS 2026
+- **C++ 標準**: C++23 模式 (MSVC 旗標 `/std:c++latest`)
 
 ---
 
-## 專案整合 (Integration)
+## 專案引入方法 (Single-Header Integration)
 
-`httplib23` 為單檔包含 (Single-header) 標頭檔，您只需將 [`httplib23.hpp`](../httplib23.hpp) 複製到您的專案目錄中並直接包含：
+`httplib23` 為單檔包含 (Single-header) 設計，您只需將 [`include/httplib23.hpp`](../include/httplib23.hpp) 複製到專案標頭檔目錄中：
 
 ```cpp
 #include "httplib23.hpp"
 ```
 
-由於 Winsock2 需要連結 `ws2_32.lib`，`httplib23.hpp` 內部已預設包含 `#pragma comment(lib, "ws2_32.lib")`，因此在 MSVC 下無需額外在專案設定中指定 `.lib` 檔。
+連結 Windows Socket 函式庫 (`ws2_32.lib`) 即可直接編譯使用。
 
 ---
 
-## 編譯命令 (Compilation)
+## 第一個 HTTP Server
 
-### 命令列編譯 (MSVC `cl.exe`)
+建立 `main.cpp`：
 
-開啟 Visual Studio Developer Command Prompt 或於腳本中載入 `vcvars64.bat`：
+```cpp
+#include <print>
+#include "httplib23.hpp"
 
-```cmd
-cl.exe /std:c++latest /W4 /WX /EHsc /utf-8 main.cpp
+int main() {
+    httplib23::Server server;
+
+    // 開啟 Swagger UI (/docs) 與 Scalar UI (/scalar) 文件端點
+    server.enable_docs(true);
+
+    server.Get("/", "Home endpoint").handle([](const httplib23::Request&, httplib23::Response& res) {
+        res.set_content("Welcome to httplib23!", "text/plain; charset=utf-8");
+    });
+
+    std::println("Server running on http://127.0.0.1:8080");
+    std::println(" - Swagger UI: http://127.0.0.1:8080/docs");
+    std::println(" - Scalar UI : http://127.0.0.1:8080/scalar");
+
+    if (server.listen("127.0.0.1", 8080)) {
+        std::cin.get();
+        server.stop();
+    }
+    return 0;
+}
 ```
 
-- `/std:c++latest`: 啟用 C++23/最新 C++ 標準特徵
-- `/W4 /WX`: 啟用最高等級警告並視為編譯錯誤
-- `/EHsc`: 啟用 C++ 異常處理
-- `/utf-8`: 設定原始碼與執行字元集為 UTF-8
+---
 
-### 執行編譯與測試腳本
+## 編譯命令 (MSVC Command Line)
 
-專案內提供自動編譯與執行腳本 [`build_and_test.bat`](../build_and_test.bat)：
+打開 Developer Command Prompt for VS 並執行：
 
 ```cmd
-.\build_and_test.bat
+cl.exe /std:c++latest /W4 /WX /EHsc /utf-8 main.cpp ws2_32.lib
 ```
 
-該腳本會使用 MSVC 編譯測試程式 [`test_runner.cpp`](../test_runner.cpp) 並執行：
-1. 基礎 Utility 單元測試
-2. Router 導向匹配測試
-3. OpenAPI 生成與格式檢查
-4. Server / Client 整合測試
-5. 50 個 Thread 併發 500 個 HTTP 請求的高併發壓測
-6. CRT Debug Heap 記憶體洩漏自動檢測
+說明：
+- `/std:c++latest`: 啟用 C++23 語言特性與標準庫。
+- `/W4 /WX`: 最高等級警報，並將警告視為錯誤。
+- `/EHsc`: 啟用標準 C++ 例外處理。
+- `/utf-8`: 設定原始碼與執行階段字元集為 UTF-8。
+- `ws2_32.lib`: 連結 Windows Socket 系統 API 庫。
+
+---
+
+## 執行測試套件 (Automated Test Suite)
+
+專案包含完整的單元測試、高併發壓測與記憶體洩漏檢測：
+
+```cmd
+build_and_test.bat
+```
