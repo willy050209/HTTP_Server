@@ -853,7 +853,9 @@ public:
 /// API 文件生成選項配置結構體。
 /// </summary>
 struct DocOptions {
-    bool enabled = true;
+    bool enabled = true;         // 是否開啟全域 API 文件功能
+    bool enable_swagger = true;  // 是否單獨啟用 Swagger UI 頁面
+    bool enable_scalar = true;   // 是否單獨啟用 Scalar UI 頁面
     std::string openapi_path = "/openapi.json";
     std::string swagger_path = "/docs";
     std::string scalar_path = "/scalar";
@@ -1027,6 +1029,22 @@ public:
     }
 
     /// <summary>
+    /// 設定是否單獨啟用 Swagger UI 文件頁面（預設開啟）。
+    /// </summary>
+    Server& enable_swagger(const bool enable = true) noexcept {
+        m_doc_options.enable_swagger = enable;
+        return *this;
+    }
+
+    /// <summary>
+    /// 設定是否單獨啟用 Scalar UI 文件頁面（預設開啟）。
+    /// </summary>
+    Server& enable_scalar(const bool enable = true) noexcept {
+        m_doc_options.enable_scalar = enable;
+        return *this;
+    }
+
+    /// <summary>
     /// 獲取目前 API 文件配置選項。
     /// </summary>
     [[nodiscard]] const DocOptions& get_doc_options() const noexcept {
@@ -1085,7 +1103,7 @@ public:
                 };
             }
 
-            if (!m_doc_options.swagger_path.empty() && !m_doc_options.openapi_path.empty()) {
+            if (m_doc_options.enable_swagger && !m_doc_options.swagger_path.empty() && !m_doc_options.openapi_path.empty()) {
                 const std::string openapi_url = m_doc_options.openapi_path;
                 const std::string title = m_doc_options.title + " - Swagger UI";
                 m_router.add_route(Method::GET, m_doc_options.swagger_path, "Interactive Swagger API Documentation").handler = [openapi_url, title](const Request&, Response& res) {
@@ -1093,7 +1111,7 @@ public:
                 };
             }
 
-            if (!m_doc_options.scalar_path.empty() && !m_doc_options.openapi_path.empty()) {
+            if (m_doc_options.enable_scalar && !m_doc_options.scalar_path.empty() && !m_doc_options.openapi_path.empty()) {
                 const std::string openapi_url = m_doc_options.openapi_path;
                 const std::string title = m_doc_options.title + " - Scalar UI";
                 m_router.add_route(Method::GET, m_doc_options.scalar_path, "Interactive Scalar API Documentation").handler = [openapi_url, title](const Request&, Response& res) {

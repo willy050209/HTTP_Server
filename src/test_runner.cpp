@@ -310,6 +310,31 @@ void test_doc_configuration() {
         server.stop();
     }
 
+    // 3. 測試單獨開啟/關閉 Swagger UI 或 Scalar UI
+    {
+        httplib23::Server server1;
+        server1.enable_swagger(true).enable_scalar(false);
+        const uint16_t port1 = 18083;
+        assert(server1.listen("127.0.0.1", port1) == true);
+
+        httplib23::Client client1("127.0.0.1", port1);
+        assert(client1.Get("/docs")->status == 200);     // Swagger UI 啟用
+        assert(client1.Get("/scalar")->status == 404);   // Scalar UI 關閉
+        assert(client1.Get("/openapi.json")->status == 200);
+        server1.stop();
+
+        httplib23::Server server2;
+        server2.enable_swagger(false).enable_scalar(true);
+        const uint16_t port2 = 18084;
+        assert(server2.listen("127.0.0.1", port2) == true);
+
+        httplib23::Client client2("127.0.0.1", port2);
+        assert(client2.Get("/docs")->status == 404);     // Swagger UI 關閉
+        assert(client2.Get("/scalar")->status == 200);   // Scalar UI 啟用
+        assert(client2.Get("/openapi.json")->status == 200);
+        server2.stop();
+    }
+
     std::println("  -> API Documentation configuration tests passed!");
 }
 
