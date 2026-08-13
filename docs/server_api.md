@@ -1,6 +1,6 @@
 # Server API 使用說明 (Server API Reference)
 
-`httplib23::Server` 提供高效能的 HTTP Server 實作，支援鏈式 (Fluent API) 路由與 API 文件標註。
+`httplib23::Server` 提供高效能的 HTTP Server 實作，支援鏈式 (Fluent API) 路由、非同步 Logger 與 API 文件標註。
 
 ---
 
@@ -14,6 +14,45 @@ bool is_started = server.listen("127.0.0.1", 8080);
 
 // 優雅關閉伺服器 (Graceful Shutdown)
 server.stop();
+```
+
+---
+
+## 非同步日誌記錄器 (Asynchronous Producer-Consumer Logger)
+
+`httplib23` 內建輕量、高併發、零外部相依的 **Producer-Consumer** 架構非同步 Logger：
+
+### 核心特性
+1. **Producer-Consumer 雙核架構**: Worker 執行緒（Producer）僅需將格式化訊息推入 Queue 後立即傳回，由專屬背景執行緒（Consumer）進行批次 I/O 寫入。
+2. **零開銷層級過濾 (Log Level & OFF)**: 提供 `DEBUG`, `INFO`, `WARN`, `ERROR`, `OFF`。當層級設為 `OFF` 或低於目前門檻時，極早期 Return，完全不耗費字串格式化開銷。
+3. **零巨集與 C++20 `std::source_location`**: 自動精準擷取呼叫者的檔名與行號。
+4. **自訂 Sink (Hook / Callback)**: 可註冊自訂 Callback Lambda，寫入檔案或串接日誌收集系統 (如 ELK/Loki)。
+
+### 日誌使用範例
+
+```cpp
+#include "httplib23.hpp"
+
+int main() {
+    // 1. 設定 Log Level 門檻
+    httplib23::Logger::instance().set_level(httplib23::LogLevel::INFO);
+
+    // 2. 自訂 Log Sink (選擇性：預設輸出至 Console)
+    httplib23::Logger::instance().set_sink([](httplib23::LogLevel level, std::string_view msg) {
+        // 自訂將 Log 寫入檔案或日誌中心
+    });
+
+    // 3. 全域 Log 輔助函式 (自動捕捉檔名與行號)
+    httplib23::log_info("Server listening on http://{}:{}", "127.0.0.1", 8080);
+    httplib23::log_warn("High connection load detected: {} req/s", 5000);
+    httplib23::log_error("Database connection failed, status code: {}", 500);
+
+    // 4. 當設定為 LogLevel::OFF 時，達到極低零開銷
+    httplib23::Logger::instance().set_level(httplib23::LogLevel::OFF);
+    httplib23::log_debug("This will be filtered out instantly with zero overhead");
+
+    return 0;
+}
 ```
 
 ---

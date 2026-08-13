@@ -19,6 +19,9 @@
 #ifdef DELETE
 #undef DELETE
 #endif
+#ifdef ERROR
+#undef ERROR
+#endif
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -44,7 +47,10 @@
 #include <algorithm>
 #include <queue>
 #include <concepts>
+#include <type_traits>
 #include <format>
+#include <print>
+#include <source_location>
 #include <cstdint>
 #include <stdexcept>
 #include <crtdbg.h>
@@ -329,6 +335,199 @@ namespace detail {
 }
 
 } // namespace detail
+
+// ============================================================================
+// 2.1 Asynchronous Logging Engine (Producer-Consumer Pattern)
+// ============================================================================
+
+/// <summary>
+/// 日誌記錄等級。
+/// </summary>
+enum class LogLevel : uint8_t {
+    DEBUG = 0,
+    INFO  = 1,
+    WARN  = 2,
+    ERROR = 3,
+    OFF   = 4
+};
+
+/// <summary>
+/// 將 LogLevel 轉為字串描述。
+/// </summary>
+[[nodiscard]] inline constexpr std::string_view level_to_string(const LogLevel level) noexcept {
+    switch (level) {
+        case LogLevel::DEBUG: return "DEBUG";
+        case LogLevel::INFO:  return "INFO";
+        case LogLevel::WARN:  return "WARN";
+        case LogLevel::ERROR: return "ERROR";
+        case LogLevel::OFF:   return "OFF";
+        default:              return "LOG";
+    }
+}
+
+/// <summary>
+/// 輕量、高效能非同步 Producer-Consumer Logger。
+/// 支援無外部相依、零開銷 LogLevel 檢測、自訂 Sink 回呼函數與 C++20 std::source_location。
+/// </summary>
+class Logger {
+public:
+    using LogCallback = std::function<void(LogLevel level, std::string_view msg)>;
+
+private:
+    std::atomic<LogLevel> m_level{LogLevel::INFO};
+    LogCallback m_custom_sink = nullptr;
+    std::queue<std::pair<LogLevel, std::string>> m_log_queue;
+    std::mutex m_mutex;
+    std::condition_variable m_cv;
+    std::thread m_bg_thread;
+    std::atomic<bool> m_running{true};
+
+    [[nodiscard]] static std::string_view extract_filename(const std::string_view path) noexcept {
+        const size_t pos = path.find_last_of("/\\");
+        if (pos != std::string_view::npos) return path.substr(pos + 1);
+        return path;
+    }
+
+    [[nodiscard]] static std::string get_current_timestamp() noexcept {
+        const auto now = std::chrono::system_clock::now();
+        return std::format("{:%Y-%m-%d %H:%M:%S}", now);
+    }
+
+public:
+    static Logger& instance() noexcept {
+        static Logger log;
+        return log;
+    }
+
+    void set_level(const LogLevel level) noexcept {
+        m_level.store(level, std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] LogLevel get_level() const noexcept {
+        return m_level.load(std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] bool is_enabled(const LogLevel level) const noexcept {
+        return level >= m_level.load(std::memory_order_relaxed);
+    }
+
+    void set_sink(LogCallback callback) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_custom_sink = std::move(callback);
+    }
+
+    void log(const LogLevel level,
+             const std::source_location& loc,
+             const std::string_view msg) {
+        if (!is_enabled(level)) return;
+
+        std::string timestamp = get_current_timestamp();
+        std::string final_log = std::format("[{}] [{}] [{}:{}] {}\n",
+            timestamp,
+            level_to_string(level),
+            extract_filename(loc.file_name()),
+            loc.line(),
+            msg
+        );
+
+        push_to_queue(level, std::move(final_log));
+    }
+
+    void push_to_queue(const LogLevel level, std::string final_log) {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_log_queue.emplace(level, std::move(final_log));
+        }
+        m_cv.notify_one();
+    }
+
+private:
+    Logger() {
+        m_bg_thread = std::thread([this]() {
+            while (true) {
+                std::pair<LogLevel, std::string> log_item;
+                LogCallback current_sink = nullptr;
+                {
+                    std::unique_lock<std::mutex> lock(m_mutex);
+                    m_cv.wait(lock, [this]() {
+                        return !m_running || !m_log_queue.empty();
+                    });
+                    if (!m_running && m_log_queue.empty()) break;
+
+                    log_item = std::move(m_log_queue.front());
+                    m_log_queue.pop();
+                    current_sink = m_custom_sink;
+                }
+
+                if (current_sink) {
+                    current_sink(log_item.first, log_item.second);
+                } else {
+                    std::print("{}", log_item.second);
+                    std::fflush(stdout);
+                }
+            }
+        });
+    }
+
+    ~Logger() {
+        m_running = false;
+        m_cv.notify_all();
+        if (m_bg_thread.joinable()) {
+            m_bg_thread.join();
+        }
+    }
+};
+
+/// <summary>
+/// 封裝格式化字串與呼叫位置 (std::source_location) 的輔助結構。
+/// </summary>
+template <typename... Args>
+struct log_location_fmt {
+    std::format_string<Args...> fmt;
+    std::source_location loc;
+
+    template <typename S>
+        requires std::convertible_to<const S&, std::string_view>
+    consteval log_location_fmt(const S& s, std::source_location l = std::source_location::current())
+        : fmt(s), loc(l) {}
+};
+
+// 頂層 Log Helper 函式
+template <typename... Args>
+inline void log_debug(
+    log_location_fmt<std::type_identity_t<Args>...> fmt_loc,
+    Args&&... args) {
+    if (!Logger::instance().is_enabled(LogLevel::DEBUG)) return;
+    std::string formatted_msg = std::format(fmt_loc.fmt, std::forward<Args>(args)...);
+    Logger::instance().log(LogLevel::DEBUG, fmt_loc.loc, formatted_msg);
+}
+
+template <typename... Args>
+inline void log_info(
+    log_location_fmt<std::type_identity_t<Args>...> fmt_loc,
+    Args&&... args) {
+    if (!Logger::instance().is_enabled(LogLevel::INFO)) return;
+    std::string formatted_msg = std::format(fmt_loc.fmt, std::forward<Args>(args)...);
+    Logger::instance().log(LogLevel::INFO, fmt_loc.loc, formatted_msg);
+}
+
+template <typename... Args>
+inline void log_warn(
+    log_location_fmt<std::type_identity_t<Args>...> fmt_loc,
+    Args&&... args) {
+    if (!Logger::instance().is_enabled(LogLevel::WARN)) return;
+    std::string formatted_msg = std::format(fmt_loc.fmt, std::forward<Args>(args)...);
+    Logger::instance().log(LogLevel::WARN, fmt_loc.loc, formatted_msg);
+}
+
+template <typename... Args>
+inline void log_error(
+    log_location_fmt<std::type_identity_t<Args>...> fmt_loc,
+    Args&&... args) {
+    if (!Logger::instance().is_enabled(LogLevel::ERROR)) return;
+    std::string formatted_msg = std::format(fmt_loc.fmt, std::forward<Args>(args)...);
+    Logger::instance().log(LogLevel::ERROR, fmt_loc.loc, formatted_msg);
+}
 
 // ============================================================================
 // 3. Request & Response Objects

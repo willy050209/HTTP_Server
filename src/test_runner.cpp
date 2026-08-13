@@ -38,6 +38,59 @@ void test_utilities() {
 }
 
 /// <summary>
+/// 測試: 非同步 Producer-Consumer Logger 功能測試
+/// </summary>
+void test_logger() {
+    std::println("[TEST] Running Asynchronous Logger Tests...");
+
+    std::vector<std::string> received_logs;
+    std::mutex log_mutex;
+
+    httplib23::Logger::instance().set_sink([&received_logs, &log_mutex](httplib23::LogLevel level, std::string_view msg) {
+        std::lock_guard<std::mutex> lock(log_mutex);
+        received_logs.push_back(std::format("[{}] {}", httplib23::level_to_string(level), msg));
+    });
+
+    httplib23::Logger::instance().set_level(httplib23::LogLevel::INFO);
+
+    // DEBUG 訊息應被過濾 (zero overhead)
+    httplib23::log_debug("This debug message should be filtered {}", 123);
+    
+    // INFO, WARN, ERROR 訊息應正常記錄
+    httplib23::log_info("Hello Async Logger {}", 42);
+    httplib23::log_warn("Warning event {}", "TestWarn");
+    httplib23::log_error("Error event code {}", 500);
+
+    // 等待背景 Logger 執行緒處理佇列
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    {
+        std::lock_guard<std::mutex> lock(log_mutex);
+        assert(received_logs.size() == 3);
+        assert(received_logs[0].find("Hello Async Logger 42") != std::string::npos);
+        assert(received_logs[1].find("Warning event TestWarn") != std::string::npos);
+        assert(received_logs[2].find("Error event code 500") != std::string::npos);
+        assert(received_logs[0].find("test_runner.cpp") != std::string::npos); // std::source_location
+    }
+
+    // 測試 LogLevel::OFF
+    httplib23::Logger::instance().set_level(httplib23::LogLevel::OFF);
+    httplib23::log_error("This error message should be completely ignored when OFF");
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    {
+        std::lock_guard<std::mutex> lock(log_mutex);
+        assert(received_logs.size() == 3);
+    }
+
+    // 恢復預設 Sink 與 INFO 層級
+    httplib23::Logger::instance().set_sink(nullptr);
+    httplib23::Logger::instance().set_level(httplib23::LogLevel::INFO);
+
+    std::println("  -> Asynchronous Logger tests passed!");
+}
+
+/// <summary>
 /// 測試 2: Router 路由配對測試 (包含動態參數與靜態路徑)
 /// </summary>
 void test_router_matching() {
@@ -238,6 +291,7 @@ void test_server_client_integration() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
         });
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
 
     for (auto& w : workers) {
@@ -344,6 +398,7 @@ int main() {
     std::println("========================================================");
 
     test_utilities();
+    test_logger();
     test_router_matching();
     test_client_url_parsing_and_exceptions();
     test_openapi_generator();

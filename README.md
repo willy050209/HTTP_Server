@@ -4,7 +4,7 @@
 [![MSVC](https://img.shields.io/badge/Compiler-MSVC-purple.svg)](https://visualstudio.microsoft.com/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-一個基於 **C++23** 建立的輕量化、高併發、零外部相依性 (Zero-dependency)、單檔包含 (Single-header `httplib23.hpp`) 的現代化 HTTP Server & Client 函式庫，同時內建 **OpenAPI 3.0** JSON 規格產生與 **Swagger UI** / **Scalar UI** 雙互動式網頁文件服務。
+一個基於 **C++23** 建立的輕量化、高併發、零外部相依性 (Zero-dependency)、單檔包含 (Single-header `httplib23.hpp`) 的現代化 HTTP Server & Client 函式庫，內建 **Producer-Consumer 非同步 Logger**、**OpenAPI 3.0** JSON 規格產生與 **Swagger UI** / **Scalar UI** 雙互動式網頁文件服務。
 
 ---
 
@@ -12,7 +12,12 @@
 
 - ⚡ **單檔包含 (Single-header)**: 僅需引入 `httplib23.hpp` 即可使用，完全零第三方依賴。
 - 🚀 **高效能 IOCP 併發架構**: 基於 Windows 原生 **I/O Completion Ports (IOCP)** 與 Worker Thread Pool，支援極高連線併發處理。
-- 💎 **現代 C++23 風格**: 使用 `std::string_view`, `std::expected`, `std::span`, `std::format`, Concepts, Lambda 及 Fluent API。
+- 📝 **Producer-Consumer 非同步 Logger Engine**:
+  - **高效非阻塞**: IOCP / Worker 執行緒只負責將格式化 Log 入列，由獨立背景 Consumer 執行緒批次輸出。
+  - **零開銷過濾 (Log Level & OFF)**: 提供 `DEBUG`, `INFO`, `WARN`, `ERROR`, `OFF`，過濾時早期 Return 零開銷。
+  - **零巨集 & `std::source_location`**: 使用 C++20 `std::source_location` 自動取得調用檔名與行號。
+  - **自訂 Sink**: 支援傳入 Lambda Callback，可自訂輸出至 Console、檔案或日誌中心 (Loki/ELK)。
+- 💎 **現代 C++23 風格**: 使用 `std::string_view`, `std::expected`, `std::span`, `std::format`, `std::print`, Concepts, Lambda 及 Fluent API。
 - 📜 **自動化與可自訂 API 文件 (Swagger UI & Scalar UI)**:
   - **`/docs`**: 預設嵌入 **Swagger UI** 互動式線上測試與文件網頁 (路徑可自訂)。
   - **`/scalar`**: 預設嵌入 **Scalar UI** (`@scalar/api-reference`) 現代化網頁介面 (路徑可自訂)。
@@ -24,16 +29,19 @@
 
 ## 快速開始 (Quick Start)
 
-### 1. HTTP Server 範例 (含文件單獨開關與自訂設定)
+### 1. HTTP Server & Async Logger 範例
 
 ```cpp
-#include <print>
 #include "httplib23.hpp"
 
 int main() {
+    // 1. 配置非同步 Logger (支援 DEBUG/INFO/WARN/ERROR/OFF 與自訂 Sink)
+    httplib23::Logger::instance().set_level(httplib23::LogLevel::INFO);
+    httplib23::log_info("伺服器正在準備啟動...");
+
     httplib23::Server server;
 
-    // 配置 API 文件選項 (支援單獨開啟/關閉 Swagger UI 或 Scalar UI)
+    // 2. 配置 API 文件選項 (支援單獨開啟/關閉 Swagger UI 或 Scalar UI)
     server.set_doc_options({
         .enabled = true,
         .enable_swagger = true,       // 啟用 Swagger UI
@@ -45,10 +53,7 @@ int main() {
         .version = "1.0.0"
     });
 
-    // 亦可使用方便的流暢 API 單獨開關：
-    // server.enable_swagger(true).enable_scalar(false);
-
-    // 定義 GET API 並加入 OpenAPI 文件元資料 (Fluent API)
+    // 3. 定義 GET API 並加入 OpenAPI 文件元資料 (Fluent API)
     server.Get("/api/v1/users/{id}", "取得用戶詳情")
         .tag("User")
         .summary("依據 User ID 獲取用戶資料")
@@ -56,12 +61,13 @@ int main() {
         .response(200, "成功取得用戶資訊", "application/json")
         .handle([](const httplib23::Request& req, httplib23::Response& res) {
             auto id = req.get_path_param("id").value_or("0");
+            httplib23::log_info("Handling request for user ID: {}", id);
             res.set_json(std::format(R"({{"id":{}, "name":"Alice", "role":"Admin"}})", id));
         });
 
-    std::println("伺服器啟動於 http://127.0.0.1:8080");
-    std::println(" - Swagger UI 文件: http://127.0.0.1:8080/docs");
-    std::println(" - Scalar UI 文件 : http://127.0.0.1:8080/scalar");
+    httplib23::log_info("伺服器啟動於 http://127.0.0.1:8080");
+    httplib23::log_info(" - Swagger UI 文件: http://127.0.0.1:8080/docs");
+    httplib23::log_info(" - Scalar UI 文件 : http://127.0.0.1:8080/scalar");
 
     if (server.listen("127.0.0.1", 8080)) {
         std::cin.get();
@@ -74,7 +80,6 @@ int main() {
 ### 2. HTTP Client 範例
 
 ```cpp
-#include <print>
 #include "httplib23.hpp"
 
 int main() {
@@ -83,10 +88,10 @@ int main() {
     // 發送 GET 請求
     auto res = client.Get("/api/v1/users/42");
     if (res) {
-        std::println("HTTP Status: {}", res->status);
-        std::println("Response Body: {}", res->body);
+        httplib23::log_info("HTTP Status: {}", res->status);
+        httplib23::log_info("Response Body: {}", res->body);
     } else {
-        std::println(stderr, "Request failed: {}", res.error());
+        httplib23::log_error("Request failed: {}", res.error());
     }
 
     return 0;
@@ -103,7 +108,7 @@ int main() {
 cl.exe /std:c++latest /W4 /WX /EHsc /utf-8 main.cpp ws2_32.lib
 ```
 
-執行完整測試套件（含高併發壓測與記憶體洩漏檢測）：
+執行完整測試套件（含 Producer-Consumer Logger、高併發壓測與記憶體洩漏檢測）：
 
 ```cmd
 build_and_test.bat
@@ -116,7 +121,7 @@ build_and_test.bat
 請參考 [`docs/`](docs/) 目錄查看完整的說明文件：
 
 - 📘 [快速入門與建置指南](docs/getting_started.md)
-- 📙 [Server API 介面說明](docs/server_api.md)
+- 📙 [Server API 介面與 Async Logger 說明](docs/server_api.md)
 - 📗 [Client API 介面說明](docs/client_api.md)
 - 📙 [OpenAPI 3.0, Swagger UI & Scalar UI 整合說明](docs/openapi_scalar.md)
 - 🔬 [系統架構與 IOCP 高併發設計](docs/architecture.md)
