@@ -2,19 +2,91 @@
 #ifndef HTTPLIB23_HPP
 #define HTTPLIB23_HPP
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef _WINSOCK_DEPRECATED_NO_WARNINGS
-#define _WINSOCK_DEPRECATED_NO_WARNINGS
-#endif
+// ============================================================================
+// Platform Detection & Socket Abstraction Layer
+// ============================================================================
 
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <mswsock.h>
+#if defined(_WIN32) || defined(_WIN64)
+    #define HTTPLIB23_PLATFORM_WINDOWS
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #ifndef _WINSOCK_DEPRECATED_NO_WARNINGS
+        #define _WINSOCK_DEPRECATED_NO_WARNINGS
+    #endif
+
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    #include <mswsock.h>
+    #include <crtdbg.h>
+
+    #pragma comment(lib, "ws2_32.lib")
+
+    using socket_t = SOCKET;
+    using ssize_t = std::ptrdiff_t;
+    inline constexpr socket_t invalid_socket = INVALID_SOCKET;
+    inline constexpr int socket_error_val = SOCKET_ERROR;
+
+    inline void close_socket(socket_t s) noexcept {
+        if (s != invalid_socket) {
+            ::closesocket(s);
+        }
+    }
+
+    inline int get_last_socket_error() noexcept {
+        return ::WSAGetLastError();
+    }
+
+    inline bool set_nonblocking(socket_t s) noexcept {
+        u_long mode = 1;
+        return ::ioctlsocket(s, FIONBIO, &mode) == 0;
+    }
+#else
+    #define HTTPLIB23_PLATFORM_POSIX
+
+    #include <sys/socket.h>
+    #include <sys/types.h>
+    #include <sys/uio.h>
+    #include <netinet/in.h>
+    #include <netinet/tcp.h>
+    #include <arpa/inet.h>
+    #include <unistd.h>
+    #include <fcntl.h>
+    #include <netdb.h>
+    #include <errno.h>
+
+    #if defined(__APPLE__) || defined(__MACH__)
+        #define HTTPLIB23_PLATFORM_MACOS
+        #include <sys/event.h>
+        #include <sys/time.h>
+    #elif defined(__linux__)
+        #define HTTPLIB23_PLATFORM_LINUX
+        #include <sys/epoll.h>
+    #endif
+
+    using socket_t = int;
+    inline constexpr socket_t invalid_socket = -1;
+    inline constexpr int socket_error_val = -1;
+
+    inline void close_socket(socket_t s) noexcept {
+        if (s != invalid_socket) {
+            ::close(s);
+        }
+    }
+
+    inline int get_last_socket_error() noexcept {
+        return errno;
+    }
+
+    inline bool set_nonblocking(socket_t s) noexcept {
+        const int flags = ::fcntl(s, F_GETFL, 0);
+        if (flags == -1) return false;
+        return ::fcntl(s, F_SETFL, flags | O_NONBLOCK) == 0;
+    }
+#endif
 
 #ifdef DELETE
 #undef DELETE
@@ -22,8 +94,6 @@
 #ifdef ERROR
 #undef ERROR
 #endif
-
-#pragma comment(lib, "ws2_32.lib")
 
 #include <iostream>
 #include <string>
@@ -53,9 +123,26 @@
 #include <source_location>
 #include <cstdint>
 #include <stdexcept>
-#include <crtdbg.h>
 
 namespace httplib23 {
+
+// ============================================================================
+// NetworkContext (RAII Network Lifecycle Manager)
+// ============================================================================
+
+struct NetworkContext {
+    NetworkContext() noexcept {
+#if defined(HTTPLIB23_PLATFORM_WINDOWS)
+        WSADATA wsaData;
+        WSAStartup(MAKEWORD(2, 2), &wsaData);
+#endif
+    }
+    ~NetworkContext() noexcept {
+#if defined(HTTPLIB23_PLATFORM_WINDOWS)
+        WSACleanup();
+#endif
+    }
+};
 
 // ============================================================================
 // Security Limits & Constants
@@ -98,8 +185,6 @@ enum class StatusCode : int32_t {
 /// <summary>
 /// 根據 HTTP 狀態碼獲得標準文字描述。
 /// </summary>
-/// <param name="code">HTTP 狀態碼數值。</param>
-/// <returns>對應之狀態字串 view。</returns>
 [[nodiscard]] inline constexpr std::string_view get_status_message(const int32_t code) noexcept {
     switch (code) {
         case 200: return "OK";
@@ -125,11 +210,6 @@ enum class StatusCode : int32_t {
     }
 }
 
-/// <summary>
-/// 根據 StatusCode 列舉獲得標準文字描述。
-/// </summary>
-/// <param name="status">StatusCode 列舉值。</param>
-/// <returns>對應之狀態字串 view。</returns>
 [[nodiscard]] inline constexpr std::string_view get_status_message(const StatusCode status) noexcept {
     return get_status_message(static_cast<int32_t>(status));
 }
@@ -148,11 +228,6 @@ enum class Method : uint8_t {
     UNKNOWN
 };
 
-/// <summary>
-/// 將 Method 列舉轉為字串描述。
-/// </summary>
-/// <param name="method">Method 列舉值。</param>
-/// <returns>HTTP 動詞字串。</returns>
 [[nodiscard]] inline constexpr std::string_view method_to_string(const Method method) noexcept {
     switch (method) {
         case Method::GET:     return "GET";
@@ -166,11 +241,6 @@ enum class Method : uint8_t {
     }
 }
 
-/// <summary>
-/// 將 HTTP 動詞字串轉為 Method 列舉。
-/// </summary>
-/// <param name="str">HTTP 動詞字串。</param>
-/// <returns>Method 列舉值。</returns>
 [[nodiscard]] inline constexpr Method string_to_method(const std::string_view str) noexcept {
     if (str == "GET")       return Method::GET;
     if (str == "POST")      return Method::POST;
@@ -214,105 +284,83 @@ using HeaderMap = std::unordered_map<std::string, std::string, CaseInsensitiveHa
 
 namespace detail {
 
-/// <summary>
-/// 檢查 Header Key 或 Value 是否包含 CRLF 注入字元。
-/// </summary>
-/// <param name="str">待檢查字串。</param>
-/// <returns>若包含 CRLF 傳回 true。</returns>
 [[nodiscard]] inline constexpr bool contains_crlf(const std::string_view str) noexcept {
     return str.find('\r') != std::string_view::npos || str.find('\n') != std::string_view::npos;
 }
 
-/// <summary>
-/// 修剪字串前後空白字元 (Zero-copy std::string_view)。
-/// </summary>
-/// <param name="str">待修剪字串。</param>
-/// <returns>修剪後之 string_view。</returns>
 [[nodiscard]] inline constexpr std::string_view trim(const std::string_view str) noexcept {
-    const size_t start = str.find_first_not_of(" \t\r\n");
-    if (start == std::string_view::npos) return "";
-    const size_t end = str.find_last_not_of(" \t\r\n");
-    return str.substr(start, end - start + 1);
+    const size_t first = str.find_first_not_of(" \t\r\n");
+    if (first == std::string_view::npos) return "";
+    const size_t last = str.find_last_not_of(" \t\r\n");
+    return str.substr(first, (last - first + 1));
 }
 
-/// <summary>
-/// URL 解碼純函數。
-/// </summary>
-/// <param name="str">URL 編碼字串。</param>
-/// <returns>解碼後字串。</returns>
-[[nodiscard]] inline std::string url_decode(const std::string_view str) noexcept {
+[[nodiscard]] inline std::string url_encode(const std::string_view str) {
+    std::ostringstream escaped;
+    escaped.fill('0');
+    escaped << std::hex;
+    for (const char c : str) {
+        const auto uc = static_cast<uint8_t>(c);
+        if (std::isalnum(uc) || c == '-' || c == '_' || c == '.' || c == '~') {
+            escaped << c;
+        } else {
+            escaped << '%' << std::uppercase << static_cast<int32_t>(uc);
+        }
+    }
+    return escaped.str();
+}
+
+[[nodiscard]] inline std::string url_decode(const std::string_view str) {
     std::string result;
     result.reserve(str.size());
     for (size_t i = 0; i < str.size(); ++i) {
         if (str[i] == '%') {
             if (i + 2 < str.size()) {
-                int32_t hex = 0;
-                const auto [ptr, ec] = std::from_chars(str.data() + i + 1, str.data() + i + 3, hex, 16);
+                const std::string_view hex_sv = str.substr(i + 1, 2);
+                int32_t value = 0;
+                const auto [ptr, ec] = std::from_chars(hex_sv.data(), hex_sv.data() + 2, value, 16);
                 if (ec == std::errc{}) {
-                    result.push_back(static_cast<char>(hex));
+                    result += static_cast<char>(value);
                     i += 2;
-                    continue;
+                } else {
+                    result += str[i];
                 }
+            } else {
+                result += str[i];
             }
         } else if (str[i] == '+') {
-            result.push_back(' ');
+            result += ' ';
         } else {
-            result.push_back(str[i]);
+            result += str[i];
         }
     }
     return result;
 }
 
-/// <summary>
-/// URL 編碼純函數。
-/// </summary>
-/// <param name="str">未編碼字串。</param>
-/// <returns>URL 編碼字串。</returns>
-[[nodiscard]] inline std::string url_encode(const std::string_view str) noexcept {
-    std::string result;
-    for (const uint8_t c : str) {
-        if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
-            result.push_back(static_cast<char>(c));
-        } else {
-            result += std::format("%{:02X}", c);
-        }
-    }
-    return result;
-}
-
-/// <summary>
-/// 解析 Query String 鍵值對。
-/// </summary>
-/// <param name="query">URL query 部分。</param>
-/// <returns>解析後鍵值對字典。</returns>
-[[nodiscard]] inline std::unordered_map<std::string, std::string> parse_query_string(const std::string_view query) noexcept {
-    std::unordered_map<std::string, std::string> params;
+[[nodiscard]] inline std::map<std::string, std::string> parse_query_string(const std::string_view query_str) {
+    std::map<std::string, std::string> params;
     size_t start = 0;
-    while (start < query.size()) {
-        size_t end = query.find('&', start);
-        if (end == std::string_view::npos) end = query.size();
-        const std::string_view pair = query.substr(start, end - start);
+    while (start < query_str.size()) {
+        const size_t end = query_str.find('&', start);
+        const std::string_view pair = query_str.substr(start, (end == std::string_view::npos ? query_str.size() : end) - start);
         const size_t eq = pair.find('=');
         if (eq != std::string_view::npos) {
             std::string key = url_decode(pair.substr(0, eq));
             std::string val = url_decode(pair.substr(eq + 1));
             params[std::move(key)] = std::move(val);
         } else if (!pair.empty()) {
-            params[url_decode(pair)] = "";
+            std::string key = url_decode(pair);
+            params[std::move(key)] = "";
         }
+        if (end == std::string_view::npos) break;
         start = end + 1;
     }
     return params;
 }
 
-/// <summary>
-/// 轉義 JSON 特殊字元。
-/// </summary>
-/// <param name="str">未轉義字串。</param>
-/// <returns>JSON 安全轉義字串。</returns>
-[[nodiscard]] inline std::string escape_json(const std::string_view str) noexcept {
+[[nodiscard]] inline std::string escape_json(const std::string_view str) {
     std::string out;
-    out.reserve(str.size() + 8);
+    out.reserve(str.size() + 16);
     for (const char c : str) {
         switch (c) {
             case '"':  out += "\\\""; break;
@@ -326,7 +374,7 @@ namespace detail {
                 if (static_cast<uint8_t>(c) < 0x20) {
                     out += std::format("\\u{:04x}", static_cast<uint8_t>(c));
                 } else {
-                    out.push_back(c);
+                    out += c;
                 }
                 break;
         }
@@ -340,9 +388,6 @@ namespace detail {
 // 2.1 Asynchronous Logging Engine (Producer-Consumer Pattern)
 // ============================================================================
 
-/// <summary>
-/// 日誌記錄等級。
-/// </summary>
 enum class LogLevel : uint8_t {
     DEBUG = 0,
     INFO  = 1,
@@ -351,9 +396,6 @@ enum class LogLevel : uint8_t {
     OFF   = 4
 };
 
-/// <summary>
-/// 將 LogLevel 轉為字串描述。
-/// </summary>
 [[nodiscard]] inline constexpr std::string_view level_to_string(const LogLevel level) noexcept {
     switch (level) {
         case LogLevel::DEBUG: return "DEBUG";
@@ -365,10 +407,6 @@ enum class LogLevel : uint8_t {
     }
 }
 
-/// <summary>
-/// 輕量、高效能非同步 Producer-Consumer Logger。
-/// 支援無外部相依、零開銷 LogLevel 檢測、自訂 Sink 回呼函數與 C++20 std::source_location。
-/// </summary>
 class Logger {
 public:
     using LogCallback = std::function<void(LogLevel level, std::string_view msg)>;
@@ -478,9 +516,6 @@ private:
     }
 };
 
-/// <summary>
-/// 封裝格式化字串與呼叫位置 (std::source_location) 的輔助結構。
-/// </summary>
 template <typename... Args>
 struct log_location_fmt {
     std::format_string<Args...> fmt;
@@ -492,7 +527,6 @@ struct log_location_fmt {
         : fmt(s), loc(l) {}
 };
 
-// 頂層 Log Helper 函式
 template <typename... Args>
 inline void log_debug(
     log_location_fmt<std::type_identity_t<Args>...> fmt_loc,
@@ -533,48 +567,27 @@ inline void log_error(
 // 3. Request & Response Objects
 // ============================================================================
 
-/// <summary>
-/// HTTP 請求物件。
-/// </summary>
 struct Request {
     Method method = Method::GET;
     std::string path;
     std::string raw_target;
     HeaderMap headers;
     std::string body;
-    std::unordered_map<std::string, std::string> query_params;
+    std::map<std::string, std::string> query_params;
     std::unordered_map<std::string, std::string> path_params;
-    std::string remote_addr;
-    uint16_t remote_port = 0;
 
-    /// <summary>
-    /// 獲取指定 Header。
-    /// </summary>
     [[nodiscard]] std::optional<std::string> get_header(const std::string_view key) const noexcept {
         const auto it = headers.find(std::string(key));
         if (it != headers.end()) return it->second;
         return std::nullopt;
     }
 
-    /// <summary>
-    /// 檢查 Header 是否存在。
-    /// </summary>
-    [[nodiscard]] bool has_header(const std::string_view key) const noexcept {
-        return headers.contains(std::string(key));
-    }
-
-    /// <summary>
-    /// 獲取 Query 參數。
-    /// </summary>
     [[nodiscard]] std::optional<std::string> get_param(const std::string_view key) const noexcept {
         const auto it = query_params.find(std::string(key));
         if (it != query_params.end()) return it->second;
         return std::nullopt;
     }
 
-    /// <summary>
-    /// 獲取 Path 動態參數。
-    /// </summary>
     [[nodiscard]] std::optional<std::string> get_path_param(const std::string_view key) const noexcept {
         const auto it = path_params.find(std::string(key));
         if (it != path_params.end()) return it->second;
@@ -582,440 +595,281 @@ struct Request {
     }
 };
 
-/// <summary>
-/// HTTP 回應物件。
-/// </summary>
 struct Response {
     int32_t status = 200;
     HeaderMap headers;
     std::string body;
 
-    /// <summary>
-    /// 設定 Response 文字內容。
-    /// </summary>
-    void set_content(const std::string_view content, const std::string_view content_type = "text/plain; charset=utf-8") noexcept {
+    void set_content(const std::string_view content, const std::string_view content_type = "text/plain") {
+        if (detail::contains_crlf(content_type)) {
+            throw std::invalid_argument("CRLF injection detected in Content-Type");
+        }
         body = std::string(content);
-        set_header("Content-Type", std::string(content_type));
-        set_header("Content-Length", std::to_string(body.size()));
+        headers["Content-Type"] = std::string(content_type);
     }
 
-    /// <summary>
-    /// 設定 Response JSON 內容。
-    /// </summary>
-    void set_json(const std::string_view json_str) noexcept {
-        set_content(json_str, "application/json");
+    void set_json(std::string json_content) {
+        set_content(std::move(json_content), "application/json; charset=utf-8");
     }
 
-    /// <summary>
-    /// 設定自訂 Response Header（含 CRLF 注入過濾檢查）。
-    /// </summary>
-    /// <exception cref="std::invalid_argument">當 Header key 或 value 包含 CRLF 時擲出。</exception>
     void set_header(std::string key, std::string value) {
         if (detail::contains_crlf(key) || detail::contains_crlf(value)) {
-            throw std::invalid_argument("CRLF injection detected in HTTP header key or value");
+            throw std::invalid_argument("CRLF injection detected in Header key or value");
         }
         headers[std::move(key)] = std::move(value);
     }
 
-    /// <summary>
-    /// 設定重導向 Response。
-    /// </summary>
     void set_redirect(const std::string_view location, const int32_t redirect_status = 302) {
+        if (detail::contains_crlf(location)) {
+            throw std::invalid_argument("CRLF injection detected in Redirect Location");
+        }
         status = redirect_status;
-        set_header("Location", std::string(location));
-        set_content("", "text/plain");
+        headers["Location"] = std::string(location);
     }
 
-    /// <summary>
-    /// 將 Header 序列化為 HTTP 協定標頭字串（適用於 Scatter-Gather I/O）。
-    /// </summary>
-    [[nodiscard]] std::string serialize_headers() const noexcept {
+    [[nodiscard]] std::string serialize_headers() const {
         std::string res;
-        res.reserve(256);
-        const std::string_view msg = get_status_message(status);
-        res += std::format("HTTP/1.1 {} {}\r\n", status, msg);
-        
-        HeaderMap final_headers = headers;
-        if (!final_headers.contains("Content-Length")) {
-            final_headers["Content-Length"] = std::to_string(body.size());
+        res.reserve(256 + headers.size() * 64);
+        res += std::format("HTTP/1.1 {} {}\r\n", status, get_status_message(status));
+
+        bool has_content_length = false;
+        bool has_server = false;
+        bool has_connection = false;
+
+        for (const auto& [k, v] : headers) {
+            if (CaseInsensitiveCompare{}(k, "Content-Length")) has_content_length = true;
+            if (CaseInsensitiveCompare{}(k, "Server")) has_server = true;
+            if (CaseInsensitiveCompare{}(k, "Connection")) has_connection = true;
+            res += std::format("{}: {}\r\n", k, v);
         }
-        if (!final_headers.contains("Connection")) {
-            final_headers["Connection"] = "close";
+
+        if (!has_content_length) {
+            res += std::format("Content-Length: {}\r\n", body.size());
         }
-        
-        for (const auto& [k, v] : final_headers) {
-            res += k;
-            res += ": ";
-            res += v;
-            res += "\r\n";
+        if (!has_server) {
+            res += "Server: httplib23/1.0 (C++23 Modern Engine)\r\n";
+        }
+        if (!has_connection) {
+            res += "Connection: close\r\n";
         }
         res += "\r\n";
         return res;
     }
 };
 
+using HandlerFunc = std::function<void(const Request&, Response&)>;
+
 // ============================================================================
-// 4. OpenAPI Metadata & Fluent Route API
+// 4. OpenAPI & Swagger UI / Scalar UI Documentation Generator
 // ============================================================================
 
-/// <summary>
-/// API 參數文件元資料。
-/// </summary>
-struct RouteParamDoc {
+struct ParameterMeta {
     std::string name;
     std::string description;
     bool required = true;
-    std::string in_location = "path";
+    std::string in_type = "query"; // "query", "path", "header"
     std::string data_type = "string";
 };
 
-/// <summary>
-/// API 回應文件元資料。
-/// </summary>
-struct RouteResponseDoc {
+struct ResponseMeta {
     int32_t status_code = 200;
     std::string description;
     std::string content_type = "application/json";
 };
 
-/// <summary>
-/// API Route 元資料。
-/// </summary>
-struct RouteMetadata {
-    std::string path;
+struct RouteMeta {
     Method method = Method::GET;
+    std::string pattern;
     std::string summary;
     std::string description;
     std::vector<std::string> tags;
-    std::vector<RouteParamDoc> parameters;
-    std::vector<RouteResponseDoc> responses;
+    std::vector<ParameterMeta> parameters;
+    std::vector<ResponseMeta> responses;
 };
 
-using HandlerFunc = std::function<void(const Request&, Response&)>;
+struct RouteEntry {
+    RouteMeta meta;
+    HandlerFunc handler;
+};
 
-/// <summary>
-/// 流暢介面 Fluent API 包裝物件。
-/// </summary>
 class FluentRoute {
 private:
-    RouteMetadata& m_meta;
+    RouteMeta& m_meta;
     HandlerFunc& m_handler;
 
 public:
-    FluentRoute(RouteMetadata& meta, HandlerFunc& handler)
-        : m_meta(meta), m_handler(handler) {}
+    FluentRoute(RouteMeta& meta, HandlerFunc& handler) noexcept : m_meta(meta), m_handler(handler) {}
 
-    FluentRoute& tag(std::string tag_name) noexcept {
+    FluentRoute& tag(std::string tag_name) {
         m_meta.tags.push_back(std::move(tag_name));
         return *this;
     }
 
-    FluentRoute& summary(std::string sum_str) noexcept {
-        m_meta.summary = std::move(sum_str);
+    FluentRoute& summary(std::string sum) {
+        m_meta.summary = std::move(sum);
         return *this;
     }
 
-    FluentRoute& description(std::string desc_str) noexcept {
-        m_meta.description = std::move(desc_str);
+    FluentRoute& description(std::string desc) {
+        m_meta.description = std::move(desc);
         return *this;
     }
 
-    FluentRoute& param(std::string name, std::string desc, const bool required = true, std::string location = "path", std::string type = "string") noexcept {
-        m_meta.parameters.push_back(RouteParamDoc{
+    FluentRoute& param(std::string name, std::string description = "", bool required = true, std::string in_type = "query", std::string data_type = "string") {
+        m_meta.parameters.push_back(ParameterMeta{
             .name = std::move(name),
-            .description = std::move(desc),
+            .description = std::move(description),
             .required = required,
-            .in_location = std::move(location),
-            .data_type = std::move(type)
+            .in_type = std::move(in_type),
+            .data_type = std::move(data_type)
         });
         return *this;
     }
 
-    FluentRoute& response(const int32_t status_code, std::string desc, std::string content_type = "application/json") noexcept {
-        m_meta.responses.push_back(RouteResponseDoc{
+    FluentRoute& response(int32_t status_code, std::string description, std::string content_type = "application/json") {
+        m_meta.responses.push_back(ResponseMeta{
             .status_code = status_code,
-            .description = std::move(desc),
+            .description = std::move(description),
             .content_type = std::move(content_type)
         });
         return *this;
     }
 
-    FluentRoute& handle(HandlerFunc handler) {
-        if (!handler) {
-            throw std::invalid_argument("Route handler cannot be empty");
-        }
-        m_handler = std::move(handler);
-        return *this;
-    }
-
-    void operator=(HandlerFunc handler) {
-        handle(std::move(handler));
+    void handle(HandlerFunc fn) {
+        m_handler = std::move(fn);
     }
 };
 
-// ============================================================================
-// 5. Router & Path Matching
-// ============================================================================
-
-/// <summary>
-/// HTTP 核心路由器。
-/// </summary>
-class Router {
-public:
-    struct RouteEntry {
-        std::string pattern;
-        Method route_method = Method::GET;
-        RouteMetadata meta;
-        HandlerFunc handler;
-        std::vector<std::string> param_names;
-    };
-
-private:
-    std::vector<RouteEntry> m_routes;
-
-public:
-    RouteEntry& add_route(const Method method, std::string pattern, std::string summary = "") {
-        if (pattern.empty() || pattern[0] != '/') {
-            throw std::invalid_argument("Route pattern must start with '/'");
-        }
-
-        RouteEntry entry;
-        entry.route_method = method;
-        entry.pattern = pattern;
-        entry.meta.path = pattern;
-        entry.meta.method = method;
-        entry.meta.summary = std::move(summary);
-        
-        size_t i = 0;
-        while (i < pattern.size()) {
-            if (pattern[i] == '{') {
-                const size_t end = pattern.find('}', i);
-                if (end != std::string::npos) {
-                    std::string param_name = pattern.substr(i + 1, end - i - 1);
-                    entry.param_names.push_back(param_name);
-                    entry.meta.parameters.push_back(RouteParamDoc{
-                        .name = param_name,
-                        .description = std::format("Parameter {}", param_name),
-                        .required = true,
-                        .in_location = "path",
-                        .data_type = "string"
-                    });
-                    i = end + 1;
-                    continue;
-                }
-            } else if (pattern[i] == ':') {
-                size_t end = pattern.find_first_of("/?#", i);
-                if (end == std::string::npos) end = pattern.size();
-                std::string param_name = pattern.substr(i + 1, end - i - 1);
-                entry.param_names.push_back(param_name);
-                entry.meta.parameters.push_back(RouteParamDoc{
-                    .name = param_name,
-                    .description = std::format("Parameter {}", param_name),
-                    .required = true,
-                    .in_location = "path",
-                    .data_type = "string"
-                });
-                i = end;
-                continue;
-            }
-            i++;
-        }
-        
-        m_routes.push_back(std::move(entry));
-        return m_routes.back();
-    }
-
-    [[nodiscard]] bool match(const Method method, const std::string_view path, HandlerFunc& out_handler, std::unordered_map<std::string, std::string>& out_params) const noexcept {
-        static auto split = [](const std::string_view s) noexcept {
-            std::vector<std::string_view> parts;
-            size_t start = 0;
-            while (start < s.size()) {
-                while (start < s.size() && s[start] == '/') start++;
-                if (start >= s.size()) break;
-                size_t end = s.find('/', start);
-                if (end == std::string_view::npos) end = s.size();
-                parts.push_back(s.substr(start, end - start));
-                start = end;
-            }
-            return parts;
-        };
-
-        for (const auto& route : m_routes) {
-            if (route.route_method != method) continue;
-            
-            if (route.param_names.empty()) {
-                if (route.pattern == path) {
-                    out_handler = route.handler;
-                    return true;
-                }
-                continue;
-            }
-
-            const auto route_parts = split(route.pattern);
-            const auto path_parts = split(path);
-
-            if (route_parts.size() != path_parts.size()) continue;
-
-            bool matched = true;
-            std::unordered_map<std::string, std::string> temp_params;
-
-            for (size_t k = 0; k < route_parts.size(); ++k) {
-                const std::string_view r_part = route_parts[k];
-                const std::string_view p_part = path_parts[k];
-
-                if (r_part.starts_with('{') && r_part.ends_with('}')) {
-                    std::string param_name(r_part.substr(1, r_part.size() - 2));
-                    temp_params[param_name] = detail::url_decode(p_part);
-                } else if (r_part.starts_with(':')) {
-                    std::string param_name(r_part.substr(1));
-                    temp_params[param_name] = detail::url_decode(p_part);
-                } else if (r_part != p_part) {
-                    matched = false;
-                    break;
-                }
-            }
-
-            if (matched) {
-                out_handler = route.handler;
-                out_params = std::move(temp_params);
-                return true;
-            }
-        }
-        return false;
-    }
-
-    [[nodiscard]] const std::vector<RouteEntry>& get_routes() const noexcept {
-        return m_routes;
-    }
-};
-
-// ============================================================================
-// 6. OpenAPI 3.0 & Scalar UI Generator
-// ============================================================================
-
-/// <summary>
-/// OpenAPI 3.0.3 JSON 產生器。
-/// </summary>
 class OpenApiGenerator {
 public:
-    [[nodiscard]] static std::string generate_spec(const std::vector<Router::RouteEntry>& routes, const std::string_view title = "httplib23 API Document", const std::string_view version = "1.0.0") noexcept {
+    [[nodiscard]] static std::string generate_spec(const std::vector<RouteEntry>& routes, const std::string_view title = "httplib23 API", const std::string_view version = "1.0.0") {
         std::string json;
-        json.reserve(2048);
-        json += "{\n";
-        json += "  \"openapi\": \"3.0.3\",\n";
-        json += "  \"info\": {\n";
-        json += std::format("    \"title\": \"{}\",\n", detail::escape_json(title));
-        json += std::format("    \"version\": \"{}\"\n", detail::escape_json(version));
-        json += "  },\n";
-        json += "  \"paths\": {\n";
+        json.reserve(4096);
+        json += std::format(R"({{
+  "openapi": "3.0.3",
+  "info": {{
+    "title": "{}",
+    "version": "{}"
+  }},
+  "paths": {{
+)", detail::escape_json(title), detail::escape_json(version));
 
-        std::map<std::string, std::vector<const Router::RouteEntry*>> path_map;
-        for (const auto& r : routes) {
-            path_map[r.pattern].push_back(&r);
+        std::map<std::string, std::vector<const RouteEntry*>> path_map;
+        for (const auto& entry : routes) {
+            path_map[entry.meta.pattern].push_back(&entry);
         }
 
-        size_t path_idx = 0;
-        for (const auto& [path_str, route_list] : path_map) {
-            json += std::format("    \"{}\": {{\n", detail::escape_json(path_str));
-            size_t route_idx = 0;
-            for (const auto* r : route_list) {
-                std::string method_lower = std::string(method_to_string(r->route_method));
-                std::transform(method_lower.begin(), method_lower.end(), method_lower.begin(), [](const uint8_t c) noexcept -> char {
-                    return static_cast<char>(std::tolower(c));
-                });
-                
+        bool first_path = true;
+        for (const auto& [path, entry_list] : path_map) {
+            if (!first_path) json += ",\n";
+            first_path = false;
+
+            std::string openapi_path = path;
+            size_t pos = 0;
+            while ((pos = openapi_path.find(':', pos)) != std::string::npos) {
+                size_t end = openapi_path.find('/', pos);
+                if (end == std::string::npos) end = openapi_path.size();
+                std::string param_name = openapi_path.substr(pos + 1, end - pos - 1);
+                openapi_path.replace(pos, end - pos, std::format("{{{}}}", param_name));
+                pos += param_name.size() + 2;
+            }
+
+            json += std::format("    \"{}\": {{\n", detail::escape_json(openapi_path));
+            bool first_method = true;
+            for (const auto* entry_ptr : entry_list) {
+                const auto& meta = entry_ptr->meta;
+                if (!first_method) json += ",\n";
+                first_method = false;
+
+                const std::string method_lower = [] (std::string_view s) {
+                    std::string res;
+                    for (char c : s) res += static_cast<char>(std::tolower(static_cast<uint8_t>(c)));
+                    return res;
+                }(method_to_string(meta.method));
+
                 json += std::format("      \"{}\": {{\n", method_lower);
-                if (!r->meta.summary.empty()) {
-                    json += std::format("        \"summary\": \"{}\",\n", detail::escape_json(r->meta.summary));
-                }
-                if (!r->meta.description.empty()) {
-                    json += std::format("        \"description\": \"{}\",\n", detail::escape_json(r->meta.description));
-                }
-                if (!r->meta.tags.empty()) {
-                    json += "        \"tags\": [";
-                    for (size_t ti = 0; ti < r->meta.tags.size(); ++ti) {
-                        json += std::format("\"{}\"", detail::escape_json(r->meta.tags[ti]));
-                        if (ti + 1 < r->meta.tags.size()) json += ", ";
+                json += std::format("        \"summary\": \"{}\",\n", detail::escape_json(meta.summary));
+                json += std::format("        \"description\": \"{}\"", detail::escape_json(meta.description));
+
+                if (!meta.tags.empty()) {
+                    json += ",\n        \"tags\": [";
+                    for (size_t i = 0; i < meta.tags.size(); ++i) {
+                        if (i > 0) json += ", ";
+                        json += std::format("\"{}\"", detail::escape_json(meta.tags[i]));
                     }
-                    json += "],\n";
+                    json += "]";
                 }
 
-                if (!r->meta.parameters.empty()) {
-                    json += "        \"parameters\": [\n";
-                    for (size_t pi = 0; pi < r->meta.parameters.size(); ++pi) {
-                        const auto& p = r->meta.parameters[pi];
-                        json += "          {\n";
-                        json += std::format("            \"name\": \"{}\",\n", detail::escape_json(p.name));
-                        json += std::format("            \"in\": \"{}\",\n", detail::escape_json(p.in_location));
-                        json += std::format("            \"required\": {},\n", p.required ? "true" : "false");
-                        json += std::format("            \"description\": \"{}\",\n", detail::escape_json(p.description));
-                        json += std::format("            \"schema\": {{ \"type\": \"{}\" }}\n", detail::escape_json(p.data_type));
-                        json += "          }";
-                        if (pi + 1 < r->meta.parameters.size()) json += ",";
-                        json += "\n";
+                if (!meta.parameters.empty()) {
+                    json += ",\n        \"parameters\": [\n";
+                    for (size_t i = 0; i < meta.parameters.size(); ++i) {
+                        const auto& p = meta.parameters[i];
+                        if (i > 0) json += ",\n";
+                        json += std::format(R"(          {{
+            "name": "{}",
+            "in": "{}",
+            "required": {},
+            "description": "{}",
+            "schema": {{ "type": "{}" }}
+          }})", detail::escape_json(p.name), detail::escape_json(p.in_type), (p.required ? "true" : "false"), detail::escape_json(p.description), detail::escape_json(p.data_type));
                     }
-                    json += "        ],\n";
+                    json += "\n        ]";
                 }
 
-                json += "        \"responses\": {\n";
-                if (r->meta.responses.empty()) {
+                json += ",\n        \"responses\": {\n";
+                if (meta.responses.empty()) {
                     json += "          \"200\": { \"description\": \"OK\" }\n";
                 } else {
-                    for (size_t ri = 0; ri < r->meta.responses.size(); ++ri) {
-                        const auto& resp = r->meta.responses[ri];
-                        json += std::format("          \"{}\": {{\n", resp.status_code);
-                        json += std::format("            \"description\": \"{}\"\n", detail::escape_json(resp.description));
-                        json += "          }";
-                        if (ri + 1 < r->meta.responses.size()) json += ",";
-                        json += "\n";
+                    for (size_t i = 0; i < meta.responses.size(); ++i) {
+                        const auto& r = meta.responses[i];
+                        if (i > 0) json += ",\n";
+                        json += std::format("          \"{}\": {{ \"description\": \"{}\" }}", r.status_code, detail::escape_json(r.description));
                     }
+                    json += "\n";
                 }
                 json += "        }\n";
-
                 json += "      }";
-                if (route_idx + 1 < route_list.size()) json += ",";
-                json += "\n";
-                route_idx++;
             }
-            json += "    }";
-            if (path_idx + 1 < path_map.size()) json += ",";
-            json += "\n";
-            path_idx++;
+            json += "\n    }";
         }
-
-        json += "  }\n";
-        json += "}\n";
+        json += "\n  }\n}";
         return json;
     }
 };
 
-/// <summary>
-/// Swagger UI HTML 文件產生器。
-/// </summary>
 class SwaggerDocGenerator {
 public:
-    [[nodiscard]] static std::string generate_html(const std::string_view openapi_url = "/openapi.json", const std::string_view title = "Swagger UI") noexcept {
+    [[nodiscard]] static std::string generate_html(const std::string_view openapi_url, const std::string_view title = "Swagger UI") {
         return std::format(R"(<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="UTF-8">
   <title>{}</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css" />
+  <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+  <style>
+    html {{ box-sizing: border-box; overflow-y: scroll; }}
+    *, *:before, *:after {{ box-sizing: inherit; }}
+    body {{ margin:0; background: #fafafa; }}
+  </style>
 </head>
 <body>
   <div id="swagger-ui"></div>
-  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" charset="UTF-8"></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-standalone-preset.js" charset="UTF-8"></script>
   <script>
-    window.onload = () => {{
+    window.onload = function() {{
       window.ui = SwaggerUIBundle({{
-        url: '{}',
+        url: "{}",
         dom_id: '#swagger-ui',
         deepLinking: true,
         presets: [
           SwaggerUIBundle.presets.apis,
-          SwaggerUIBundle.SwaggerUIStandalonePreset
+          SwaggerUIStandalonePreset
         ],
+        plugins: [
+          SwaggerUIBundle.plugins.DownloadUrl
+        ],
+        layout: "StandaloneLayout"
       }});
     }};
   </script>
@@ -1024,21 +878,15 @@ public:
     }
 };
 
-/// <summary>
-/// Scalar API Reference HTML 文件產生器。
-/// </summary>
 class ScalarDocGenerator {
 public:
-    [[nodiscard]] static std::string generate_html(const std::string_view openapi_url = "/openapi.json", const std::string_view title = "Scalar API Documentation") noexcept {
+    [[nodiscard]] static std::string generate_html(const std::string_view openapi_url, const std::string_view title = "Scalar API Reference") {
         return std::format(R"(<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{}</title>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    body {{ margin: 0; padding: 0; background-color: #0f172a; color: #f8fafc; font-family: system-ui, sans-serif; }}
-  </style>
 </head>
 <body>
   <script id="api-reference" data-url="{}"></script>
@@ -1048,9 +896,245 @@ public:
     }
 };
 
-/// <summary>
-/// API 文件生成選項配置結構體。
-/// </summary>
+// ============================================================================
+// 5. High Performance Router Engine
+// ============================================================================
+
+class Router {
+private:
+    struct Segment {
+        std::string name;
+        bool is_param = false;
+    };
+
+    struct RouteNode {
+        std::string path_segment;
+        bool is_param = false;
+        std::string param_name;
+        std::unordered_map<Method, RouteEntry> handlers;
+        std::vector<std::unique_ptr<RouteNode>> children;
+    };
+
+    RouteNode m_root;
+    std::vector<RouteEntry> m_routes_flat;
+
+    [[nodiscard]] static std::vector<Segment> parse_path(const std::string_view path) {
+        std::vector<Segment> segments;
+        size_t start = 0;
+        while (start < path.size()) {
+            while (start < path.size() && path[start] == '/') ++start;
+            if (start >= path.size()) break;
+            const size_t end = path.find('/', start);
+            const std::string_view seg_sv = path.substr(start, (end == std::string_view::npos ? path.size() : end) - start);
+            
+            Segment seg;
+            if (seg_sv.starts_with('{') && seg_sv.ends_with('}')) {
+                seg.is_param = true;
+                seg.name = std::string(seg_sv.substr(1, seg_sv.size() - 2));
+            } else if (seg_sv.starts_with(':')) {
+                seg.is_param = true;
+                seg.name = std::string(seg_sv.substr(1));
+            } else {
+                seg.is_param = false;
+                seg.name = std::string(seg_sv);
+            }
+            segments.push_back(std::move(seg));
+            if (end == std::string_view::npos) break;
+            start = end + 1;
+        }
+        return segments;
+    }
+
+public:
+    RouteEntry& add_route(const Method method, std::string path, std::string summary = "") {
+        if (path.empty() || path[0] != '/') {
+            throw std::invalid_argument("Route path must start with '/'");
+        }
+        const auto segments = parse_path(path);
+        RouteNode* current = &m_root;
+
+        for (const auto& seg : segments) {
+            RouteNode* found = nullptr;
+            for (auto& child : current->children) {
+                if (child->is_param == seg.is_param && (seg.is_param || child->path_segment == seg.name)) {
+                    found = child.get();
+                    break;
+                }
+            }
+
+            if (!found) {
+                auto new_node = std::make_unique<RouteNode>();
+                new_node->is_param = seg.is_param;
+                if (seg.is_param) {
+                    new_node->param_name = seg.name;
+                } else {
+                    new_node->path_segment = seg.name;
+                }
+                found = new_node.get();
+                current->children.push_back(std::move(new_node));
+            }
+            current = found;
+        }
+
+        RouteEntry entry;
+        entry.meta.method = method;
+        entry.meta.pattern = path;
+        entry.meta.summary = std::move(summary);
+        
+        current->handlers[method] = entry;
+        m_routes_flat.push_back(entry);
+        return current->handlers[method];
+    }
+
+    [[nodiscard]] bool match(const Method method, const std::string_view path, HandlerFunc& out_handler, std::unordered_map<std::string, std::string>& out_params) const {
+        const auto segments = parse_path(path);
+        return match_recursive(&m_root, segments, 0, method, out_handler, out_params);
+    }
+
+    [[nodiscard]] std::vector<RouteEntry> get_routes() const {
+        std::vector<RouteEntry> routes;
+        collect_routes_recursive(&m_root, routes);
+        return routes;
+    }
+
+private:
+    void collect_routes_recursive(const RouteNode* node, std::vector<RouteEntry>& routes) const {
+        for (const auto& [method, entry] : node->handlers) {
+            routes.push_back(entry);
+        }
+        for (const auto& child : node->children) {
+            collect_routes_recursive(child.get(), routes);
+        }
+    }
+
+private:
+    bool match_recursive(const RouteNode* current, const std::vector<Segment>& segments, const size_t index, const Method method, HandlerFunc& out_handler, std::unordered_map<std::string, std::string>& out_params) const {
+        if (index == segments.size()) {
+            const auto it = current->handlers.find(method);
+            if (it != current->handlers.end()) {
+                out_handler = it->second.handler;
+                return true;
+            }
+            return false;
+        }
+
+        const auto& seg = segments[index];
+        for (const auto& child : current->children) {
+            if (!child->is_param && child->path_segment == seg.name) {
+                if (match_recursive(child.get(), segments, index + 1, method, out_handler, out_params)) {
+                    return true;
+                }
+            } else if (child->is_param) {
+                out_params[child->param_name] = seg.name;
+                if (match_recursive(child.get(), segments, index + 1, method, out_handler, out_params)) {
+                    return true;
+                }
+                out_params.erase(child->param_name);
+            }
+        }
+        return false;
+    }
+};
+
+// ============================================================================
+// 6. Cross-Platform I/O Multiplexer Engine Abstraction
+// ============================================================================
+
+namespace detail {
+
+class IOMultiplexer {
+public:
+    virtual ~IOMultiplexer() = default;
+    virtual bool add_socket(socket_t sock) = 0;
+    virtual bool remove_socket(socket_t sock) = 0;
+    virtual void poll_events(int timeout_ms, std::function<void(socket_t sock, bool is_read, bool is_write)> callback) = 0;
+};
+
+#if defined(HTTPLIB23_PLATFORM_LINUX)
+class EpollMultiplexer : public IOMultiplexer {
+private:
+    int epoll_fd = -1;
+
+public:
+    EpollMultiplexer() {
+        epoll_fd = ::epoll_create1(0);
+    }
+    ~EpollMultiplexer() override {
+        if (epoll_fd != -1) {
+            ::close(epoll_fd);
+        }
+    }
+
+    bool add_socket(socket_t sock) override {
+        epoll_event ev{};
+        ev.events = EPOLLIN | EPOLLET; // Edge-Triggered
+        ev.data.fd = sock;
+        return ::epoll_ctl(epoll_fd, EPOLL_CTL_ADD, sock, &ev) == 0;
+    }
+
+    bool remove_socket(socket_t sock) override {
+        return ::epoll_ctl(epoll_fd, EPOLL_CTL_DEL, sock, nullptr) == 0;
+    }
+
+    void poll_events(int timeout_ms, std::function<void(socket_t sock, bool is_read, bool is_write)> callback) override {
+        constexpr int MAX_EVENTS = 64;
+        epoll_event events[MAX_EVENTS];
+        const int nfds = ::epoll_wait(epoll_fd, events, MAX_EVENTS, timeout_ms);
+        for (int i = 0; i < nfds; ++i) {
+            const socket_t sock = events[i].data.fd;
+            const bool is_read = (events[i].events & EPOLLIN) != 0;
+            const bool is_write = (events[i].events & EPOLLOUT) != 0;
+            callback(sock, is_read, is_write);
+        }
+    }
+};
+#elif defined(HTTPLIB23_PLATFORM_MACOS)
+class KqueueMultiplexer : public IOMultiplexer {
+private:
+    int kq_fd = -1;
+
+public:
+    KqueueMultiplexer() {
+        kq_fd = ::kqueue();
+    }
+    ~KqueueMultiplexer() override {
+        if (kq_fd != -1) {
+            ::close(kq_fd);
+        }
+    }
+
+    bool add_socket(socket_t sock) override {
+        struct kevent ev;
+        EV_SET(&ev, sock, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, nullptr);
+        return ::kevent(kq_fd, &ev, 1, nullptr, 0, nullptr) == 0;
+    }
+
+    bool remove_socket(socket_t sock) override {
+        struct kevent ev;
+        EV_SET(&ev, sock, EVFILT_READ, EV_DELETE, 0, 0, nullptr);
+        return ::kevent(kq_fd, &ev, 1, nullptr, 0, nullptr) == 0;
+    }
+
+    void poll_events(int timeout_ms, std::function<void(socket_t sock, bool is_read, bool is_write)> callback) override {
+        constexpr int MAX_EVENTS = 64;
+        struct kevent events[MAX_EVENTS];
+        struct timespec ts;
+        ts.tv_sec = timeout_ms / 1000;
+        ts.tv_nsec = (timeout_ms % 1000) * 1000000;
+
+        const int nev = ::kevent(kq_fd, nullptr, 0, events, MAX_EVENTS, (timeout_ms >= 0 ? &ts : nullptr));
+        for (int i = 0; i < nev; ++i) {
+            const socket_t sock = static_cast<socket_t>(events[i].ident);
+            const bool is_read = (events[i].filter == EVFILT_READ);
+            const bool is_write = (events[i].filter == EVFILT_WRITE);
+            callback(sock, is_read, is_write);
+        }
+    }
+};
+#endif
+
+} // namespace detail
+
 struct DocOptions {
     bool enabled = true;         // 是否開啟全域 API 文件功能
     bool enable_swagger = true;  // 是否單獨啟用 Swagger UI 頁面
@@ -1066,9 +1150,6 @@ struct DocOptions {
 // 7. Thread Pool Engine (With Bounded Queue Size)
 // ============================================================================
 
-/// <summary>
-/// 高效能有界 Worker 執行緒池 (Bounded Queue Backpressure)。
-/// </summary>
 class ThreadPool {
 private:
     std::vector<std::thread> m_workers;
@@ -1109,9 +1190,6 @@ public:
         }
     }
 
-    /// <summary>
-    /// 將 Task 放入佇列。若佇列已滿傳回 false。
-    /// </summary>
     [[nodiscard]] bool enqueue(std::function<void()> task) noexcept {
         if (!task) return false;
         {
@@ -1130,11 +1208,8 @@ public:
 // 8. Connection Session State Machine (Data-Race-Free Atomic Timestamp)
 // ============================================================================
 
-/// <summary>
-/// 每條 TCP 連線 Session 狀態機與累積 Receiving Buffer (Data-Race-Free)。
-/// </summary>
 struct ConnectionSession {
-    SOCKET socket = INVALID_SOCKET;
+    socket_t socket = invalid_socket;
     std::vector<char> rx_buffer;
     std::atomic<int64_t> last_active_ms{
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1160,30 +1235,30 @@ struct ConnectionSession {
 };
 
 // ============================================================================
-// 9. IOCP Server Implementation
+// 9. Server Implementation (IOCP / epoll / kqueue)
 // ============================================================================
 
-/// <summary>
-/// 高併發 Windows IOCP HTTP 伺服器。
-/// </summary>
 class Server {
 public:
     using MiddlewareFunc = std::function<bool(Request&, Response&)>;
 
 private:
-    HANDLE m_iocp = INVALID_HANDLE_VALUE;
-    SOCKET m_listen_socket = INVALID_SOCKET;
+    NetworkContext m_net_ctx;
+    socket_t m_listen_socket = invalid_socket;
     std::atomic<bool> m_running{false};
     Router m_router;
     std::vector<MiddlewareFunc> m_middlewares;
     std::unique_ptr<ThreadPool> m_pool;
     std::thread m_accept_thread;
     std::thread m_watchdog_thread;
-    std::vector<std::thread> m_iocp_threads;
     DocOptions m_doc_options;
 
     std::mutex m_session_mutex;
-    std::unordered_map<SOCKET, std::shared_ptr<ConnectionSession>> m_sessions;
+    std::unordered_map<socket_t, std::shared_ptr<ConnectionSession>> m_sessions;
+
+#if defined(HTTPLIB23_PLATFORM_WINDOWS)
+    HANDLE m_iocp = INVALID_HANDLE_VALUE;
+    std::vector<std::thread> m_iocp_threads;
 
     enum class IOOperation : uint8_t { READ, WRITE };
 
@@ -1192,60 +1267,42 @@ private:
         WSABUF wsa_bufs[2];
         char buffer[8192];
         IOOperation op_type;
-        SOCKET socket;
+        socket_t socket;
         std::string send_header_buf;
         std::string send_body_buf;
     };
+#else
+    std::unique_ptr<detail::IOMultiplexer> m_multiplexer;
+    std::thread m_poll_thread;
+#endif
 
 public:
-    Server() {
-        WSADATA wsaData;
-        const int32_t err = WSAStartup(MAKEWORD(2, 2), &wsaData);
-        if (err != 0) {
-            throw std::runtime_error("WSAStartup failed");
-        }
-    }
+    Server() = default;
 
     ~Server() {
         stop();
-        WSACleanup();
     }
 
-    /// <summary>
-    /// 設定 API 文件生成與路由選項（可開啟/關閉文件、自訂 Swagger UI 與 Scalar UI 路徑）。
-    /// </summary>
     Server& set_doc_options(DocOptions options) noexcept {
         m_doc_options = std::move(options);
         return *this;
     }
 
-    /// <summary>
-    /// 設定是否啟用 API 文件生成。
-    /// </summary>
     Server& enable_docs(const bool enable = true) noexcept {
         m_doc_options.enabled = enable;
         return *this;
     }
 
-    /// <summary>
-    /// 設定是否單獨啟用 Swagger UI 文件頁面（預設開啟）。
-    /// </summary>
     Server& enable_swagger(const bool enable = true) noexcept {
         m_doc_options.enable_swagger = enable;
         return *this;
     }
 
-    /// <summary>
-    /// 設定是否單獨啟用 Scalar UI 文件頁面（預設開啟）。
-    /// </summary>
     Server& enable_scalar(const bool enable = true) noexcept {
         m_doc_options.enable_scalar = enable;
         return *this;
     }
 
-    /// <summary>
-    /// 獲取目前 API 文件配置選項。
-    /// </summary>
     [[nodiscard]] const DocOptions& get_doc_options() const noexcept {
         return m_doc_options;
     }
@@ -1319,11 +1376,12 @@ public:
             }
         }
 
+#if defined(HTTPLIB23_PLATFORM_WINDOWS)
         m_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
         if (m_iocp == NULL) return false;
 
         m_listen_socket = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
-        if (m_listen_socket == INVALID_SOCKET) return false;
+        if (m_listen_socket == invalid_socket) return false;
 
         BOOL reuse = TRUE;
         setsockopt(m_listen_socket, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
@@ -1333,15 +1391,15 @@ public:
         server_addr.sin_port = htons(port);
         inet_pton(AF_INET, host.c_str(), &server_addr.sin_addr);
 
-        if (bind(m_listen_socket, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) == SOCKET_ERROR) {
-            closesocket(m_listen_socket);
-            m_listen_socket = INVALID_SOCKET;
+        if (bind(m_listen_socket, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) == socket_error_val) {
+            close_socket(m_listen_socket);
+            m_listen_socket = invalid_socket;
             return false;
         }
 
-        if (::listen(m_listen_socket, SOMAXCONN) == SOCKET_ERROR) {
-            closesocket(m_listen_socket);
-            m_listen_socket = INVALID_SOCKET;
+        if (::listen(m_listen_socket, SOMAXCONN) == socket_error_val) {
+            close_socket(m_listen_socket);
+            m_listen_socket = invalid_socket;
             return false;
         }
 
@@ -1356,59 +1414,113 @@ public:
         m_accept_thread = std::thread([this]() { accept_loop(); });
         m_watchdog_thread = std::thread([this]() { timeout_watchdog_loop(); });
         return true;
+#else
+        m_listen_socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (m_listen_socket == invalid_socket) return false;
+
+        int reuse = 1;
+        ::setsockopt(m_listen_socket, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+        set_nonblocking(m_listen_socket);
+
+        sockaddr_in server_addr{};
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_port = htons(port);
+        inet_pton(AF_INET, host.c_str(), &server_addr.sin_addr);
+
+        if (::bind(m_listen_socket, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) == socket_error_val) {
+            close_socket(m_listen_socket);
+            m_listen_socket = invalid_socket;
+            return false;
+        }
+
+        if (::listen(m_listen_socket, SOMAXCONN) == socket_error_val) {
+            close_socket(m_listen_socket);
+            m_listen_socket = invalid_socket;
+            return false;
+        }
+
+#if defined(HTTPLIB23_PLATFORM_LINUX)
+        m_multiplexer = std::make_unique<detail::EpollMultiplexer>();
+#elif defined(HTTPLIB23_PLATFORM_MACOS)
+        m_multiplexer = std::make_unique<detail::KqueueMultiplexer>();
+#endif
+        if (!m_multiplexer || !m_multiplexer->add_socket(m_listen_socket)) {
+            close_socket(m_listen_socket);
+            m_listen_socket = invalid_socket;
+            return false;
+        }
+
+        m_running = true;
+        m_pool = std::make_unique<ThreadPool>();
+        m_poll_thread = std::thread([this]() { posix_poll_loop(); });
+        m_watchdog_thread = std::thread([this]() { timeout_watchdog_loop(); });
+        return true;
+#endif
     }
 
     void stop() noexcept {
         if (!m_running) return;
         m_running = false;
 
+#if defined(HTTPLIB23_PLATFORM_WINDOWS)
         if (m_iocp != INVALID_HANDLE_VALUE) {
             for (size_t i = 0; i < m_iocp_threads.size(); ++i) {
                 PostQueuedCompletionStatus(m_iocp, 0, 0, NULL);
             }
         }
+#endif
 
-        if (m_listen_socket != INVALID_SOCKET) {
-            closesocket(m_listen_socket);
-            m_listen_socket = INVALID_SOCKET;
+        if (m_listen_socket != invalid_socket) {
+            close_socket(m_listen_socket);
+            m_listen_socket = invalid_socket;
         }
 
         if (m_accept_thread.joinable()) m_accept_thread.join();
         if (m_watchdog_thread.joinable()) m_watchdog_thread.join();
+
+#if defined(HTTPLIB23_PLATFORM_WINDOWS)
         for (auto& th : m_iocp_threads) {
             if (th.joinable()) th.join();
         }
         m_iocp_threads.clear();
+#else
+        if (m_poll_thread.joinable()) m_poll_thread.join();
+#endif
 
         {
             std::lock_guard<std::mutex> lock(m_session_mutex);
             for (const auto& [sock, session] : m_sessions) {
-                closesocket(sock);
+                close_socket(sock);
             }
             m_sessions.clear();
         }
 
+#if defined(HTTPLIB23_PLATFORM_WINDOWS)
         if (m_iocp != INVALID_HANDLE_VALUE) {
             CloseHandle(m_iocp);
             m_iocp = INVALID_HANDLE_VALUE;
         }
+#else
+        m_multiplexer.reset();
+#endif
 
         m_pool.reset();
     }
 
 private:
+#if defined(HTTPLIB23_PLATFORM_WINDOWS)
     void accept_loop() noexcept {
         while (m_running) {
             sockaddr_in client_addr{};
             int32_t addr_len = sizeof(client_addr);
-            const SOCKET client_socket = accept(m_listen_socket, reinterpret_cast<sockaddr*>(&client_addr), &addr_len);
-            if (client_socket == INVALID_SOCKET) {
+            const socket_t client_socket = accept(m_listen_socket, reinterpret_cast<sockaddr*>(&client_addr), &addr_len);
+            if (client_socket == invalid_socket) {
                 if (!m_running) break;
                 continue;
             }
 
             if (CreateIoCompletionPort(reinterpret_cast<HANDLE>(client_socket), m_iocp, static_cast<ULONG_PTR>(client_socket), 0) == NULL) {
-                closesocket(client_socket);
+                close_socket(client_socket);
                 continue;
             }
 
@@ -1437,6 +1549,137 @@ private:
             }
         }
     }
+#else
+    void posix_poll_loop() noexcept {
+        while (m_running) {
+            m_multiplexer->poll_events(50, [this](socket_t fd, bool is_read, bool /*is_write*/) {
+                if (!m_running) return;
+
+                if (fd == m_listen_socket) {
+                    if (is_read) {
+                        while (true) {
+                            sockaddr_in client_addr{};
+                            socklen_t addr_len = sizeof(client_addr);
+                            const socket_t client_sock = ::accept(m_listen_socket, reinterpret_cast<sockaddr*>(&client_addr), &addr_len);
+                            if (client_sock == invalid_socket) {
+                                break;
+                            }
+
+                            set_nonblocking(client_sock);
+#if defined(HTTPLIB23_PLATFORM_MACOS)
+                            int opt = 1;
+                            ::setsockopt(client_sock, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof(opt));
+#endif
+
+                            auto session = std::make_shared<ConnectionSession>();
+                            session->socket = client_sock;
+                            {
+                                std::lock_guard<std::mutex> lock(m_session_mutex);
+                                m_sessions[client_sock] = session;
+                            }
+
+                            m_multiplexer->add_socket(client_sock);
+                        }
+                    }
+                } else {
+                    if (is_read) {
+                        std::shared_ptr<ConnectionSession> session;
+                        {
+                            std::lock_guard<std::mutex> lock(m_session_mutex);
+                            const auto it = m_sessions.find(fd);
+                            if (it != m_sessions.end()) {
+                                session = it->second;
+                            }
+                        }
+
+                        if (!session) return;
+
+                        session->touch();
+                        char buf[8192];
+                        bool client_closed = false;
+
+                        while (true) {
+                            const ssize_t bytes_read = ::recv(fd, buf, sizeof(buf), 0);
+                            if (bytes_read > 0) {
+                                session->rx_buffer.insert(session->rx_buffer.end(), buf, buf + bytes_read);
+                            } else if (bytes_read == 0) {
+                                client_closed = true;
+                                break;
+                            } else {
+                                const int err = get_last_socket_error();
+                                if (err == EAGAIN || err == EWOULDBLOCK) {
+                                    break;
+                                } else {
+                                    client_closed = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (client_closed) {
+                            remove_session(fd);
+                            return;
+                        }
+
+                        bool should_disconnect = false;
+                        while (true) {
+                            const std::string_view rx_sv(session->rx_buffer.data(), session->rx_buffer.size());
+                            
+                            if (!session->header_parsed) {
+                                const size_t header_end = rx_sv.find("\r\n\r\n");
+                                if (header_end != std::string_view::npos) {
+                                    session->header_length = header_end + 4;
+                                    session->header_parsed = true;
+                                    const std::string_view header_sv = rx_sv.substr(0, header_end);
+                                    session->content_length = parse_content_length(header_sv);
+
+                                    if (session->content_length > MAX_BODY_SIZE || session->header_length > MAX_HEADER_SIZE) {
+                                        send_error_response(fd, 413, "Payload Too Large");
+                                        should_disconnect = true;
+                                        break;
+                                    }
+                                } else {
+                                    if (session->rx_buffer.size() > MAX_HEADER_SIZE) {
+                                        send_error_response(fd, 413, "Header Size Exceeds Limit");
+                                        should_disconnect = true;
+                                    }
+                                    break;
+                                }
+                            }
+
+                            if (session->header_parsed) {
+                                const size_t total_expected = session->header_length + session->content_length;
+                                if (session->rx_buffer.size() >= total_expected) {
+                                    std::string full_request(session->rx_buffer.data(), total_expected);
+                                    session->rx_buffer.erase(session->rx_buffer.begin(), session->rx_buffer.begin() + total_expected);
+                                    session->header_parsed = false;
+                                    session->content_length = 0;
+                                    session->header_length = 0;
+
+                                    const bool queued = m_pool->enqueue([this, fd, req_str = std::move(full_request)]() {
+                                        handle_http_request(fd, req_str);
+                                    });
+
+                                    if (!queued) {
+                                        send_error_response(fd, 503, "Service Unavailable - Server Busy");
+                                        should_disconnect = true;
+                                        break;
+                                    }
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (should_disconnect) {
+                            remove_session(fd);
+                        }
+                    }
+                }
+            });
+        }
+    }
+#endif
 
     void timeout_watchdog_loop() noexcept {
         while (m_running) {
@@ -1448,7 +1691,7 @@ private:
             ).count();
             const int64_t timeout_ms = std::chrono::duration_cast<std::chrono::milliseconds>(CONNECTION_TIMEOUT).count();
 
-            std::vector<SOCKET> timed_out_sockets;
+            std::vector<socket_t> timed_out_sockets;
             {
                 std::lock_guard<std::mutex> lock(m_session_mutex);
                 for (const auto& [sock, session] : m_sessions) {
@@ -1458,24 +1701,29 @@ private:
                 }
             }
 
-            for (const SOCKET sock : timed_out_sockets) {
+            for (const socket_t sock : timed_out_sockets) {
                 remove_session(sock);
             }
         }
     }
 
-    void remove_session(const SOCKET sock) noexcept {
+    void remove_session(const socket_t sock) noexcept {
         std::lock_guard<std::mutex> lock(m_session_mutex);
         if (m_sessions.contains(sock)) {
+#if defined(HTTPLIB23_PLATFORM_POSIX)
+            if (m_multiplexer) {
+                m_multiplexer->remove_socket(sock);
+            }
+#endif
             char dummy[512];
-            u_long mode = 1;
-            ioctlsocket(sock, FIONBIO, &mode);
-            while (recv(sock, dummy, sizeof(dummy), 0) > 0) {}
-            closesocket(sock);
+            set_nonblocking(sock);
+            while (::recv(sock, dummy, sizeof(dummy), 0) > 0) {}
+            close_socket(sock);
             m_sessions.erase(sock);
         }
     }
 
+#if defined(HTTPLIB23_PLATFORM_WINDOWS)
     void iocp_worker_loop() noexcept {
         DWORD bytes_transferred = 0;
         ULONG_PTR completion_key = 0;
@@ -1502,7 +1750,7 @@ private:
             }
 
             PerIoData* io_data = CONTAINING_RECORD(overlapped, PerIoData, overlapped);
-            const SOCKET client_socket = io_data->socket;
+            const socket_t client_socket = io_data->socket;
 
             if (io_data->op_type == IOOperation::READ) {
                 std::shared_ptr<ConnectionSession> session;
@@ -1523,7 +1771,6 @@ private:
                 session->rx_buffer.insert(session->rx_buffer.end(), io_data->buffer, io_data->buffer + bytes_transferred);
                 delete io_data;
 
-                // TCP Pipelining Loop: Process all complete requests in rx_buffer
                 bool should_disconnect = false;
                 while (true) {
                     const std::string_view rx_sv(session->rx_buffer.data(), session->rx_buffer.size());
@@ -1546,7 +1793,7 @@ private:
                                 send_error_response(client_socket, 413, "Header Size Exceeds Limit");
                                 should_disconnect = true;
                             }
-                            break; // Wait for more header bytes
+                            break;
                         }
                     }
 
@@ -1569,7 +1816,7 @@ private:
                                 break;
                             }
                         } else {
-                            break; // Wait for more body bytes
+                            break;
                         }
                     }
                 }
@@ -1579,7 +1826,6 @@ private:
                     continue;
                 }
 
-                // Post Next Async Read
                 auto next_io = std::make_unique<PerIoData>();
                 ZeroMemory(&next_io->overlapped, sizeof(OVERLAPPED));
                 next_io->op_type = IOOperation::READ;
@@ -1603,6 +1849,7 @@ private:
             }
         }
     }
+#endif
 
     [[nodiscard]] static size_t parse_content_length(const std::string_view header_sv) noexcept {
         size_t pos = 0;
@@ -1625,14 +1872,15 @@ private:
         return 0;
     }
 
-    void send_error_response(const SOCKET client_socket, const int32_t status_code, const std::string_view msg) noexcept {
+    void send_error_response(const socket_t client_socket, const int32_t status_code, const std::string_view msg) noexcept {
         Response res;
         res.status = status_code;
         res.set_content(msg, "text/plain");
         send_response_scatter(client_socket, res);
     }
 
-    void send_response_scatter(const SOCKET client_socket, const Response& res) noexcept {
+    void send_response_scatter(const socket_t client_socket, const Response& res) noexcept {
+#if defined(HTTPLIB23_PLATFORM_WINDOWS)
         auto send_io = std::make_unique<PerIoData>();
         ZeroMemory(&send_io->overlapped, sizeof(OVERLAPPED));
         send_io->op_type = IOOperation::WRITE;
@@ -1655,9 +1903,21 @@ private:
                 delete raw_send;
             }
         }
+#else
+        std::string header_buf = res.serialize_headers();
+        struct iovec iov[2];
+        iov[0].iov_base = const_cast<char*>(header_buf.data());
+        iov[0].iov_len = header_buf.size();
+        iov[1].iov_base = const_cast<char*>(res.body.data());
+        iov[1].iov_len = res.body.size();
+
+        ::writev(client_socket, iov, 2);
+        ::shutdown(client_socket, SHUT_WR);
+        remove_session(client_socket);
+#endif
     }
 
-    void handle_http_request(const SOCKET client_socket, const std::string& request_str) noexcept {
+    void handle_http_request(const socket_t client_socket, const std::string& request_str) noexcept {
         Request req;
         Response res;
 
@@ -1741,13 +2001,11 @@ private:
 // 10. HTTP Client Engine
 // ============================================================================
 
-/// <summary>
-/// HTTP Client 連線用戶端。
-/// </summary>
 class Client {
 private:
     std::string m_host;
     uint16_t m_port = 80;
+    NetworkContext m_net_ctx;
 
 public:
     explicit Client(std::string host_or_url, const uint16_t port = 80) : m_host(std::move(host_or_url)), m_port(port) {
@@ -1757,13 +2015,11 @@ public:
             m_host = m_host.substr(8);
         }
 
-        // Separate path component if present (e.g. "localhost:8080/api/v1" -> "localhost:8080")
         const size_t slash_pos = m_host.find('/');
         if (slash_pos != std::string::npos) {
             m_host = m_host.substr(0, slash_pos);
         }
 
-        // Separate port if present (e.g. "localhost:8080" -> "localhost", 8080)
         const size_t colon = m_host.find(':');
         if (colon != std::string::npos) {
             uint16_t parsed_port = 0;
@@ -1774,14 +2030,9 @@ public:
             }
             m_host = m_host.substr(0, colon);
         }
-
-        WSADATA wsaData;
-        WSAStartup(MAKEWORD(2, 2), &wsaData);
     }
 
-    ~Client() {
-        WSACleanup();
-    }
+    ~Client() = default;
 
     [[nodiscard]] std::expected<Response, std::string> Get(const std::string_view path, const HeaderMap& headers = {}) noexcept {
         return send_request(Method::GET, path, "", "", headers);
@@ -1810,13 +2061,13 @@ public:
 
 private:
     [[nodiscard]] std::expected<Response, std::string> send_request_once(const Method method, const std::string_view path, const std::string_view body, const std::string_view content_type, const HeaderMap& custom_headers) noexcept {
-        const SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (sock == INVALID_SOCKET) {
+        const socket_t sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (sock == invalid_socket) {
             return std::unexpected("Failed to create socket");
         }
 
-        BOOL reuse = TRUE;
-        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+        int reuse = 1;
+        ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
 
         addrinfo hints{}, *res = nullptr;
         hints.ai_family = AF_INET;
@@ -1824,25 +2075,25 @@ private:
         hints.ai_protocol = IPPROTO_TCP;
 
         const std::string port_str = std::to_string(m_port);
-        if (getaddrinfo(m_host.c_str(), port_str.c_str(), &hints, &res) != 0 || !res) {
-            closesocket(sock);
+        if (::getaddrinfo(m_host.c_str(), port_str.c_str(), &hints, &res) != 0 || !res) {
+            close_socket(sock);
             return std::unexpected("Failed to resolve host address");
         }
 
         bool connected = false;
         for (int32_t retry = 0; retry < 10; ++retry) {
-            if (connect(sock, res->ai_addr, static_cast<int32_t>(res->ai_addrlen)) != SOCKET_ERROR) {
+            if (::connect(sock, res->ai_addr, static_cast<socklen_t>(res->ai_addrlen)) != socket_error_val) {
                 connected = true;
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         if (!connected) {
-            freeaddrinfo(res);
-            closesocket(sock);
+            ::freeaddrinfo(res);
+            close_socket(sock);
             return std::unexpected("Failed to connect to host");
         }
-        freeaddrinfo(res);
+        ::freeaddrinfo(res);
 
         std::string req_str;
         req_str += std::format("{} {} HTTP/1.1\r\n", method_to_string(method), path);
@@ -1861,18 +2112,23 @@ private:
         req_str += "\r\n";
         req_str += body;
 
-        if (send(sock, req_str.c_str(), static_cast<int32_t>(req_str.size()), 0) == SOCKET_ERROR) {
-            closesocket(sock);
+#if defined(HTTPLIB23_PLATFORM_LINUX)
+        const ssize_t send_res = ::send(sock, req_str.c_str(), static_cast<int>(req_str.size()), MSG_NOSIGNAL);
+#else
+        const ssize_t send_res = ::send(sock, req_str.c_str(), static_cast<int>(req_str.size()), 0);
+#endif
+        if (send_res == socket_error_val) {
+            close_socket(sock);
             return std::unexpected("Failed to send HTTP request");
         }
 
         std::string raw_response;
         char buffer[4096];
-        int32_t bytes_read = 0;
-        while ((bytes_read = recv(sock, buffer, sizeof(buffer), 0)) > 0) {
+        ssize_t bytes_read = 0;
+        while ((bytes_read = ::recv(sock, buffer, static_cast<int>(sizeof(buffer)), 0)) > 0) {
             raw_response.append(buffer, bytes_read);
         }
-        closesocket(sock);
+        close_socket(sock);
 
         if (raw_response.empty()) {
             return std::unexpected("Empty response received from server");

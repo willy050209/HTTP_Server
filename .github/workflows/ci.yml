@@ -1,0 +1,44 @@
+name: Cross-Platform Build & Test
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build-and-test:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # 1. Windows (MSVC C++23)
+    - name: Build & Test (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        build_and_test.bat
+
+    # 2. Linux (Ubuntu GCC/Clang C++23)
+    - name: Build & Test (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        g++ -std=c++23 -O2 -pthread main.cpp -o server
+        ./server --test-mode
+        g++ -std=c++23 -O2 -pthread src/test_runner.cpp -o test_runner
+        ./test_runner
+
+    # 3. macOS (AppleClang / kqueue C++23)
+    - name: Build & Test (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        clang++ -std=c++23 -O2 main.cpp -o server
+        ./server --test-mode
+        clang++ -std=c++23 -O2 src/test_runner.cpp -o test_runner
+        ./test_runner

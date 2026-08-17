@@ -2,13 +2,16 @@
 #include <iostream>
 #include <cstdint>
 #include <format>
+#include <string_view>
 #include "include/httplib23.hpp"
 
 /// <summary>
 /// 主程式進入點，初始化 HTTP Server 並啟動服務。
 /// </summary>
+/// <param name="argc">命令列引數數量。</param>
+/// <param name="argv">命令列引數陣列。</param>
 /// <returns>執行結果狀態碼。</returns>
-int main() {
+int main(int argc, char* argv[]) {
     httplib23::Server server;
 
     // 1. Health check endpoint
@@ -42,6 +45,28 @@ int main() {
         });
 
     const uint16_t port = 8080;
+
+    // --test-mode 引數支援 (用於 CI/CD 自動化測試)
+    if (argc > 1 && std::string_view(argv[1]) == "--test-mode") {
+        httplib23::log_info("[TEST MODE] Starting server on port {} for automated test...", port);
+        if (!server.listen("127.0.0.1", port)) {
+            httplib23::log_error("[TEST MODE] Failed to start server on port {}", port);
+            return 1;
+        }
+
+        httplib23::Client client("127.0.0.1", port);
+        const auto res = client.Get("/ping");
+        if (res.has_value() && res->status == 200 && res->body == "pong") {
+            httplib23::log_info("[TEST MODE] Verification succeeded! Response: {}", res->body);
+            server.stop();
+            return 0;
+        } else {
+            httplib23::log_error("[TEST MODE] Verification failed!");
+            server.stop();
+            return 1;
+        }
+    }
+
     httplib23::log_info("========================================================");
     httplib23::log_info("Starting httplib23 HTTP Server on http://127.0.0.1:{}", port);
     httplib23::log_info(" - Swagger UI API Docs:       http://127.0.0.1:{}/docs", port);

@@ -1,22 +1,34 @@
 # httplib23
 
+[![Cross-Platform Build & Test](https://github.com/willy050209/HTTP_Server/actions/workflows/ci.yml/badge.svg)](https://github.com/willy050209/HTTP_Server/actions/workflows/ci.yml)
 [![C++23](https://img.shields.io/badge/C%2B%2B-23-blue.svg)](https://en.cppreference.com/w/cpp/23)
-[![MSVC](https://img.shields.io/badge/Compiler-MSVC-purple.svg)](https://visualstudio.microsoft.com/)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-一個基於 **C++23** 建立的輕量化、高併發、零外部相依性 (Zero-dependency)、單檔包含 (Single-header `httplib23.hpp`) 的現代化 HTTP Server & Client 函式庫，內建 **Producer-Consumer 非同步 Logger**、**OpenAPI 3.0** JSON 規格產生與 **Swagger UI** / **Scalar UI** 雙互動式網頁文件服務。
+一個基於 **C++23** 建立的高效能、跨平台 (Windows / Linux / macOS)、零外部相依性 (Zero Dependencies)、單檔包含 (Single-header `httplib23.hpp`) 的現代化 HTTP Server & Client 函式庫。
+
+底層非同步 I/O 引擎根據 OS 自動採用原生最高效能架構：
+- 🪟 **Windows**: **IOCP** (I/O Completion Ports)
+- 🐧 **Linux**: **epoll** (Edge-Triggered 非阻塞 Multiplexer)
+- 🍎 **macOS**: **kqueue** (Event Multiplexer)
+
+內建 **Producer-Consumer 非同步 Logger**、**OpenAPI 3.0** JSON 規格產生與 **Swagger UI** / **Scalar UI** 雙互動式網頁文件服務。
 
 ---
 
 ## 核心特徵 (Features)
 
 - ⚡ **單檔包含 (Single-header)**: 僅需引入 `httplib23.hpp` 即可使用，完全零第三方依賴。
-- 🚀 **高效能 IOCP 併發架構**: 基於 Windows 原生 **I/O Completion Ports (IOCP)** 與 Worker Thread Pool，支援極高連線併發處理。
+- 🚀 **跨平台高效能 I/O Multiplexer Engine**:
+  - **Windows (IOCP)**: `CreateIoCompletionPort` + `WSARecv` / `WSASend`。
+  - **Linux (epoll)**: `epoll_create1` + `EPOLLIN | EPOLLET` 邊緣觸發模式。
+  - **macOS (kqueue)**: `kqueue` + `EVFILT_READ` 事件驅動。
+  - **Scatter-Gather I/O**: Windows 下 `WSABUF[2]`，POSIX 下 `writev` 零拷貝標頭與 Payload。
 - 📝 **Producer-Consumer 非同步 Logger Engine**:
-  - **高效非阻塞**: IOCP / Worker 執行緒只負責將格式化 Log 入列，由獨立背景 Consumer 執行緒批次輸出。
+  - **高效非阻塞**: 工作執行緒（Producer）僅需將格式化 Log 入列，由獨立背景 Consumer 執行緒批次輸出。
   - **零開銷過濾 (Log Level & OFF)**: 提供 `DEBUG`, `INFO`, `WARN`, `ERROR`, `OFF`，過濾時早期 Return 零開銷。
   - **零巨集 & `std::source_location`**: 使用 C++20 `std::source_location` 自動取得調用檔名與行號。
-  - **自訂 Sink**: 支援傳入 Lambda Callback，可自訂輸出至 Console、檔案或日誌中心 (Loki/ELK)。
+  - **自訂 Sink**: 支援傳入 Lambda Callback 自訂輸出至 Console、檔案或日誌中心 (Loki/ELK)。
 - 💎 **現代 C++23 風格**: 使用 `std::string_view`, `std::expected`, `std::span`, `std::format`, `std::print`, Concepts, Lambda 及 Fluent API。
 - 📜 **自動化與可自訂 API 文件 (Swagger UI & Scalar UI)**:
   - **`/docs`**: 預設嵌入 **Swagger UI** 互動式線上測試與文件網頁 (路徑可自訂)。
@@ -24,6 +36,7 @@
   - **`/openapi.json`**: 自動將註冊之 Routes 轉換為規範的 OpenAPI 3.0.3 Spec JSON (路徑可自訂)。
   - **靈活單獨開關**: 支援全域 (`enable_docs`) 或單獨開啟/關閉 Swagger UI (`enable_swagger`) 與 Scalar UI (`enable_scalar`)。
 - 🌐 **全功能 HTTP Server & Client**: 支援 `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `OPTIONS`, `HEAD` 請求、動態路徑參數 (`/users/{id}`)、Query String 解析與 Middleware 擴充。
+- 🤖 **GitHub Actions CI/CD 集成**: 自動驗證 Windows (MSVC), Linux (GCC/Clang), macOS (AppleClang) 三平台建置與全測試套件。
 
 ---
 
@@ -34,7 +47,7 @@
 ```cpp
 #include "httplib23.hpp"
 
-int main() {
+int main(int argc, char* argv[]) {
     // 1. 配置非同步 Logger (支援 DEBUG/INFO/WARN/ERROR/OFF 與自訂 Sink)
     httplib23::Logger::instance().set_level(httplib23::LogLevel::INFO);
     httplib23::log_info("伺服器正在準備啟動...");
@@ -49,7 +62,7 @@ int main() {
         .openapi_path = "/openapi.json",
         .swagger_path = "/docs",      // Swagger UI 存取路徑
         .scalar_path = "/scalar",     // Scalar UI 存取路徑
-        .title = "My Modern C++23 API",
+        .title = "My Cross-Platform C++23 API",
         .version = "1.0.0"
     });
 
@@ -77,41 +90,30 @@ int main() {
 }
 ```
 
-### 2. HTTP Client 範例
-
-```cpp
-#include "httplib23.hpp"
-
-int main() {
-    httplib23::Client client("http://127.0.0.1:8080");
-
-    // 發送 GET 請求
-    auto res = client.Get("/api/v1/users/42");
-    if (res) {
-        httplib23::log_info("HTTP Status: {}", res->status);
-        httplib23::log_info("Response Body: {}", res->body);
-    } else {
-        httplib23::log_error("Request failed: {}", res.error());
-    }
-
-    return 0;
-}
-```
-
 ---
 
-## 編譯與測試 (Build & Test)
+## 跨平台編譯與建置 (Cross-Platform Compilation)
 
-使用 MSVC (C++23 `/std:c++latest`) 編譯：
-
+### 🪟 Windows (MSVC)
 ```cmd
-cl.exe /std:c++latest /W4 /WX /EHsc /utf-8 main.cpp ws2_32.lib
+cl.exe /std:c++latest /W4 /WX /EHsc /utf-8 /Iinclude main.cpp ws2_32.lib /Fe:server.exe
+build_and_test.bat
 ```
 
-執行完整測試套件（含 Producer-Consumer Logger、高併發壓測與記憶體洩漏檢測）：
+### 🐧 Linux (GCC / Clang C++23)
+```bash
+g++ -std=c++23 -O2 -pthread main.cpp -Iinclude -o server
+./server --test-mode
+g++ -std=c++23 -O2 -pthread src/test_runner.cpp -Iinclude -o test_runner
+./test_runner
+```
 
-```cmd
-build_and_test.bat
+### 🍎 macOS (AppleClang C++23)
+```bash
+clang++ -std=c++23 -O2 main.cpp -Iinclude -o server
+./server --test-mode
+clang++ -std=c++23 -O2 src/test_runner.cpp -Iinclude -o test_runner
+./test_runner
 ```
 
 ---
@@ -120,11 +122,11 @@ build_and_test.bat
 
 請參考 [`docs/`](docs/) 目錄查看完整的說明文件：
 
-- 📘 [快速入門與建置指南](docs/getting_started.md)
+- 📘 [快速入門與跨平台建置指南](docs/getting_started.md)
 - 📙 [Server API 介面與 Async Logger 說明](docs/server_api.md)
 - 📗 [Client API 介面說明](docs/client_api.md)
 - 📙 [OpenAPI 3.0, Swagger UI & Scalar UI 整合說明](docs/openapi_scalar.md)
-- 🔬 [系統架構與 IOCP 高併發設計](docs/architecture.md)
+- 🔬 [跨平台系統架構 (IOCP / epoll / kqueue)](docs/architecture.md)
 
 ---
 

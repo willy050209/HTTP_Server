@@ -407,11 +407,13 @@ int main() {
 
     std::println("\n[ALL TESTS PASSED SUCCESSFULLY!]\n");
 
+#if defined(HTTPLIB23_PLATFORM_WINDOWS)
     // Memory Leak Check
     const int32_t leaks = _CrtDumpMemoryLeaks();
     if (leaks != 0) {
         std::println(stderr, "[WARNING] Memory leak detected!");
     }
+#endif
 
     return 0;
 }
