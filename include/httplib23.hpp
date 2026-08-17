@@ -110,6 +110,7 @@
 #include <string_view>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <map>
 #include <functional>
 #include <thread>
@@ -1132,6 +1133,7 @@ private:
     uint32_t m_sq_mask = 0;
     uint32_t m_cq_mask = 0;
     std::mutex m_mutex;
+    std::unordered_set<socket_t> m_active_sockets;
     std::unique_ptr<EpollMultiplexer> m_fallback_epoll;
 
     static int io_uring_setup_syscall(unsigned entries, struct io_uring_params *p) {
@@ -1203,6 +1205,7 @@ public:
         if (m_fallback_epoll) return m_fallback_epoll->add_socket(sock);
         if (m_ring_fd < 0) return false;
         std::lock_guard<std::mutex> lock(m_mutex);
+        m_active_sockets.insert(sock);
         uint32_t tail = *m_sq_ktail;
         uint32_t index = tail & m_sq_mask;
         struct io_uring_sqe* sqe = &m_sqes[index];
@@ -1225,6 +1228,7 @@ public:
         if (m_fallback_epoll) return m_fallback_epoll->remove_socket(sock);
         if (m_ring_fd < 0) return false;
         std::lock_guard<std::mutex> lock(m_mutex);
+        m_active_sockets.erase(sock);
         uint32_t tail = *m_sq_ktail;
         uint32_t index = tail & m_sq_mask;
         struct io_uring_sqe* sqe = &m_sqes[index];
@@ -1258,12 +1262,16 @@ public:
             while (head != *m_cq_ktail) {
                 had_events = true;
                 struct io_uring_cqe* cqe = &m_cqes[head & m_cq_mask];
-                if (cqe->user_data != 0) {
+                if (cqe->user_data != 0 && cqe->res > 0) {
                     const socket_t sock = static_cast<socket_t>(cqe->user_data);
-                    const bool is_read = (cqe->res & POLLIN) != 0;
-                    const bool is_write = (cqe->res & POLLOUT) != 0;
-                    callback(sock, is_read, is_write);
-                    re_arm_socks.push_back(sock);
+                    if (m_active_sockets.contains(sock)) {
+                        const bool is_read = (cqe->res & POLLIN) != 0;
+                        const bool is_write = (cqe->res & POLLOUT) != 0;
+                        callback(sock, is_read, is_write);
+                        if (m_active_sockets.contains(sock)) {
+                            re_arm_socks.push_back(sock);
+                        }
+                    }
                 }
                 head++;
             }
