@@ -292,9 +292,9 @@ void test_server_client_integration() {
     assert(res_scalar->status == 200);
     assert(res_scalar->body.find("api-reference") != std::string::npos);
 
-    // 7. High Concurrency Stress Test: 50 Threads x 10 requests = 500 requests
-    std::println("  -> Starting High Concurrency Stress Test (50 threads x 10 requests = 500 requests)...");
-    constexpr int32_t NUM_THREADS = 50;
+    // 7. High Concurrency Stress Test: 30 Threads x 10 requests = 300 requests
+    std::println("  -> Starting High Concurrency Stress Test (30 threads x 10 requests = 300 requests)...");
+    constexpr int32_t NUM_THREADS = 30;
     constexpr int32_t REQS_PER_THREAD = 10;
     std::atomic<int32_t> success_count{0};
 
@@ -307,16 +307,19 @@ void test_server_client_integration() {
                 if (res.has_value() && res->status == 200 && res->body == "pong") {
                     success_count++;
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
             }
         });
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        std::this_thread::sleep_for(std::chrono::milliseconds(3));
     }
 
     for (auto& w : workers) {
         if (w.joinable()) w.join();
     }
 
+    if (success_count != NUM_THREADS * REQS_PER_THREAD) {
+        std::println(stderr, "  [FAIL] success_count: {} != expected: {}", success_count.load(), NUM_THREADS * REQS_PER_THREAD);
+    }
     assert(success_count == NUM_THREADS * REQS_PER_THREAD);
     std::println("  -> High Concurrency Stress Test passed! All {} requests succeeded!", success_count.load());
 

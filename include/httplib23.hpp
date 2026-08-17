@@ -2243,10 +2243,10 @@ public:
     }
 
     [[nodiscard]] std::expected<Response, std::string> send_request(const Method method, const std::string_view path, const std::string_view body = "", const std::string_view content_type = "", const HeaderMap& custom_headers = {}) noexcept {
-        for (int32_t attempt = 0; attempt < 10; ++attempt) {
+        for (int32_t attempt = 0; attempt < 25; ++attempt) {
             auto res = send_request_once(method, path, body, content_type, custom_headers);
             if (res.has_value()) return res;
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            std::this_thread::sleep_for(std::chrono::milliseconds(2 + attempt * 2));
         }
         return std::unexpected("Failed to receive response after retries");
     }
@@ -2261,31 +2261,36 @@ private:
         int reuse = 1;
         ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
 
-        addrinfo hints{}, *res = nullptr;
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-        hints.ai_protocol = IPPROTO_TCP;
+        sockaddr_in server_addr{};
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_port = htons(m_port);
 
-        const std::string port_str = std::to_string(m_port);
-        if (::getaddrinfo(m_host.c_str(), port_str.c_str(), &hints, &res) != 0 || !res) {
+        bool resolved = false;
+        if (::inet_pton(AF_INET, m_host.c_str(), &server_addr.sin_addr) == 1) {
+            resolved = true;
+        } else {
+            addrinfo hints{}, *res = nullptr;
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_STREAM;
+            hints.ai_protocol = IPPROTO_TCP;
+
+            const std::string port_str = std::to_string(m_port);
+            if (::getaddrinfo(m_host.c_str(), port_str.c_str(), &hints, &res) == 0 && res) {
+                server_addr = *reinterpret_cast<sockaddr_in*>(res->ai_addr);
+                ::freeaddrinfo(res);
+                resolved = true;
+            }
+        }
+
+        if (!resolved) {
             close_socket(sock);
             return std::unexpected("Failed to resolve host address");
         }
 
-        bool connected = false;
-        for (int32_t retry = 0; retry < 10; ++retry) {
-            if (::connect(sock, res->ai_addr, static_cast<socklen_t>(res->ai_addrlen)) != socket_error_val) {
-                connected = true;
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        if (!connected) {
-            ::freeaddrinfo(res);
+        if (::connect(sock, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) == socket_error_val) {
             close_socket(sock);
             return std::unexpected("Failed to connect to host");
         }
-        ::freeaddrinfo(res);
 
         std::string req_str;
         req_str += std::format("{} {} HTTP/1.1\r\n", method_to_string(method), path);
