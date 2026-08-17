@@ -1100,6 +1100,175 @@ public:
         }
     }
 };
+
+#if __has_include(<linux/io_uring.h>) && defined(HTTPLIB23_USE_IO_URING)
+#include <linux/io_uring.h>
+#include <sys/syscall.h>
+#include <sys/mman.h>
+#include <poll.h>
+
+class IoUringMultiplexer : public IOMultiplexer {
+private:
+    int m_ring_fd = -1;
+    struct io_uring_sqe* m_sqes = nullptr;
+    struct io_uring_cqe* m_cqes = nullptr;
+    uint32_t* m_sq_khead = nullptr;
+    uint32_t* m_sq_ktail = nullptr;
+    uint32_t* m_sq_flags = nullptr;
+    uint32_t* m_sq_array = nullptr;
+    uint32_t* m_cq_khead = nullptr;
+    uint32_t* m_cq_ktail = nullptr;
+    size_t m_sq_size = 0;
+    size_t m_cq_size = 0;
+    size_t m_sqes_size = 0;
+    void* m_sq_ptr = nullptr;
+    void* m_cq_ptr = nullptr;
+    uint32_t m_sq_mask = 0;
+    uint32_t m_cq_mask = 0;
+    std::mutex m_mutex;
+    std::unique_ptr<EpollMultiplexer> m_fallback_epoll;
+
+    static int io_uring_setup_syscall(unsigned entries, struct io_uring_params *p) {
+#if defined(__NR_io_uring_setup)
+        return static_cast<int>(::syscall(__NR_io_uring_setup, entries, p));
+#else
+        (void)entries; (void)p; return -1;
+#endif
+    }
+
+    static int io_uring_enter_syscall(int fd, unsigned to_submit, unsigned min_complete, unsigned flags, sigset_t *sig) {
+#if defined(__NR_io_uring_enter)
+        return static_cast<int>(::syscall(__NR_io_uring_enter, fd, to_submit, min_complete, flags, sig));
+#else
+        (void)fd; (void)to_submit; (void)min_complete; (void)flags; (void)sig; return -1;
+#endif
+    }
+
+public:
+    IoUringMultiplexer() {
+        struct io_uring_params p{};
+        constexpr unsigned QUEUE_DEPTH = 128;
+        m_ring_fd = io_uring_setup_syscall(QUEUE_DEPTH, &p);
+        if (m_ring_fd < 0) {
+            m_fallback_epoll = std::make_unique<EpollMultiplexer>();
+            return;
+        }
+
+        m_sq_mask = p.sq_entries - 1;
+        m_cq_mask = p.cq_entries - 1;
+
+        m_sq_size = p.sq_off.array + p.sq_entries * sizeof(__u32);
+        m_cq_size = p.cq_off.cqes + p.cq_entries * sizeof(struct io_uring_cqe);
+
+        m_sq_ptr = ::mmap(0, m_sq_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, m_ring_fd, IORING_OFF_SQ_RING);
+        m_cq_ptr = ::mmap(0, m_cq_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, m_ring_fd, IORING_OFF_CQ_RING);
+
+        if (m_sq_ptr == MAP_FAILED || m_cq_ptr == MAP_FAILED) {
+            m_fallback_epoll = std::make_unique<EpollMultiplexer>();
+            return;
+        }
+
+        m_sq_khead = reinterpret_cast<uint32_t*>(static_cast<char*>(m_sq_ptr) + p.sq_off.head);
+        m_sq_ktail = reinterpret_cast<uint32_t*>(static_cast<char*>(m_sq_ptr) + p.sq_off.tail);
+        m_sq_flags = reinterpret_cast<uint32_t*>(static_cast<char*>(m_sq_ptr) + p.sq_off.flags);
+        m_sq_array = reinterpret_cast<uint32_t*>(static_cast<char*>(m_sq_ptr) + p.sq_off.array);
+
+        m_sqes_size = p.sq_entries * sizeof(struct io_uring_sqe);
+        m_sqes = reinterpret_cast<struct io_uring_sqe*>(::mmap(0, m_sqes_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, m_ring_fd, IORING_OFF_SQES));
+
+        if (m_sqes == MAP_FAILED) {
+            m_fallback_epoll = std::make_unique<EpollMultiplexer>();
+            return;
+        }
+
+        m_cq_khead = reinterpret_cast<uint32_t*>(static_cast<char*>(m_cq_ptr) + p.cq_off.head);
+        m_cq_ktail = reinterpret_cast<uint32_t*>(static_cast<char*>(m_cq_ptr) + p.cq_off.tail);
+        m_cqes = reinterpret_cast<struct io_uring_cqe*>(static_cast<char*>(m_cq_ptr) + p.cq_off.cqes);
+    }
+
+    ~IoUringMultiplexer() override {
+        if (m_sq_ptr && m_sq_ptr != MAP_FAILED) ::munmap(m_sq_ptr, m_sq_size);
+        if (m_cq_ptr && m_cq_ptr != MAP_FAILED) ::munmap(m_cq_ptr, m_cq_size);
+        if (m_sqes && m_sqes != MAP_FAILED) ::munmap(m_sqes, m_sqes_size);
+        if (m_ring_fd >= 0) ::close(m_ring_fd);
+    }
+
+    bool add_socket(socket_t sock) override {
+        if (m_fallback_epoll) return m_fallback_epoll->add_socket(sock);
+        if (m_ring_fd < 0) return false;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        uint32_t tail = *m_sq_ktail;
+        uint32_t index = tail & m_sq_mask;
+        struct io_uring_sqe* sqe = &m_sqes[index];
+        std::memset(sqe, 0, sizeof(*sqe));
+        sqe->opcode = IORING_OP_POLL_ADD;
+        sqe->fd = sock;
+        sqe->poll_events = POLLIN;
+        sqe->user_data = static_cast<uint64_t>(sock);
+
+        m_sq_array[index] = index;
+        tail++;
+        std::atomic_thread_fence(std::memory_order_release);
+        *m_sq_ktail = tail;
+
+        io_uring_enter_syscall(m_ring_fd, 1, 0, 0, nullptr);
+        return true;
+    }
+
+    bool remove_socket(socket_t sock) override {
+        if (m_fallback_epoll) return m_fallback_epoll->remove_socket(sock);
+        if (m_ring_fd < 0) return false;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        uint32_t tail = *m_sq_ktail;
+        uint32_t index = tail & m_sq_mask;
+        struct io_uring_sqe* sqe = &m_sqes[index];
+        std::memset(sqe, 0, sizeof(*sqe));
+        sqe->opcode = IORING_OP_POLL_REMOVE;
+        sqe->addr = static_cast<uint64_t>(sock);
+        sqe->user_data = 0;
+
+        m_sq_array[index] = index;
+        tail++;
+        std::atomic_thread_fence(std::memory_order_release);
+        *m_sq_ktail = tail;
+
+        io_uring_enter_syscall(m_ring_fd, 1, 0, 0, nullptr);
+        return true;
+    }
+
+    void poll_events(int timeout_ms, std::function<void(socket_t sock, bool is_read, bool is_write)> callback) override {
+        if (m_fallback_epoll) {
+            m_fallback_epoll->poll_events(timeout_ms, callback);
+            return;
+        }
+        if (m_ring_fd < 0) return;
+        io_uring_enter_syscall(m_ring_fd, 0, 1, 0, nullptr);
+
+        std::vector<socket_t> re_arm_socks;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            uint32_t head = *m_cq_khead;
+            while (head != *m_cq_ktail) {
+                struct io_uring_cqe* cqe = &m_cqes[head & m_cq_mask];
+                if (cqe->user_data != 0) {
+                    const socket_t sock = static_cast<socket_t>(cqe->user_data);
+                    const bool is_read = (cqe->res & POLLIN) != 0;
+                    const bool is_write = (cqe->res & POLLOUT) != 0;
+                    callback(sock, is_read, is_write);
+                    re_arm_socks.push_back(sock);
+                }
+                head++;
+            }
+            std::atomic_thread_fence(std::memory_order_release);
+            *m_cq_khead = head;
+        }
+
+        for (const socket_t sock : re_arm_socks) {
+            add_socket(sock);
+        }
+    }
+};
+#endif
 #elif defined(HTTPLIB23_PLATFORM_MACOS)
 class KqueueMultiplexer : public IOMultiplexer {
 private:
@@ -1452,7 +1621,11 @@ public:
         }
 
 #if defined(HTTPLIB23_PLATFORM_LINUX)
+#if __has_include(<linux/io_uring.h>) && defined(HTTPLIB23_USE_IO_URING)
+        m_multiplexer = std::make_unique<detail::IoUringMultiplexer>();
+#else
         m_multiplexer = std::make_unique<detail::EpollMultiplexer>();
+#endif
 #elif defined(HTTPLIB23_PLATFORM_MACOS)
         m_multiplexer = std::make_unique<detail::KqueueMultiplexer>();
 #endif
@@ -1923,7 +2096,8 @@ private:
         iov[1].iov_base = const_cast<char*>(res.body.data());
         iov[1].iov_len = res.body.size();
 
-        ::writev(client_socket, iov, 2);
+        const ssize_t bytes_written = ::writev(client_socket, iov, 2);
+        (void)bytes_written;
         ::shutdown(client_socket, SHUT_WR);
         remove_session(client_socket);
 #endif

@@ -19,28 +19,36 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # 1. Windows (MSVC C++23)
+    # 1. Windows (MSVC C++23 / IOCP)
     - name: Set up MSVC environment
       if: runner.os == 'Windows'
       uses: ilammy/msvc-dev-cmd@v1
 
-    - name: Build & Test (Windows)
+    - name: Build & Test (Windows - IOCP)
       if: runner.os == 'Windows'
       shell: cmd
       run: |
         build_and_test.bat
 
-    # 2. Linux (Ubuntu GCC/Clang C++23)
-    - name: Build & Test (Linux)
+    # 2. Linux (Ubuntu GCC C++23 - epoll & io_uring)
+    - name: Build & Test (Linux - epoll)
       if: runner.os == 'Linux'
       run: |
-        g++ -std=c++23 -O2 -pthread main.cpp -Iinclude -o server
-        ./server --test-mode
-        g++ -std=c++23 -O2 -pthread src/test_runner.cpp -Iinclude -o test_runner
-        ./test_runner
+        g++ -std=c++23 -O2 -pthread main.cpp -Iinclude -o server_epoll
+        ./server_epoll --test-mode
+        g++ -std=c++23 -O2 -pthread src/test_runner.cpp -Iinclude -o test_runner_epoll
+        ./test_runner_epoll
+
+    - name: Build & Test (Linux - io_uring)
+      if: runner.os == 'Linux'
+      run: |
+        g++ -std=c++23 -O2 -pthread -DHTTPLIB23_USE_IO_URING=1 main.cpp -Iinclude -o server_uring
+        ./server_uring --test-mode
+        g++ -std=c++23 -O2 -pthread -DHTTPLIB23_USE_IO_URING=1 src/test_runner.cpp -Iinclude -o test_runner_uring
+        ./test_runner_uring
 
     # 3. macOS (AppleClang / kqueue C++23)
-    - name: Build & Test (macOS)
+    - name: Build & Test (macOS - kqueue)
       if: runner.os == 'macOS'
       run: |
         clang++ -std=c++23 -O2 main.cpp -Iinclude -o server
