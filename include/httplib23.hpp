@@ -1248,13 +1248,15 @@ public:
             return;
         }
         if (m_ring_fd < 0) return;
-        io_uring_enter_syscall(m_ring_fd, 0, 1, 0, nullptr);
+        io_uring_enter_syscall(m_ring_fd, 0, 0, 0, nullptr);
 
         std::vector<socket_t> re_arm_socks;
+        bool had_events = false;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             uint32_t head = *m_cq_khead;
             while (head != *m_cq_ktail) {
+                had_events = true;
                 struct io_uring_cqe* cqe = &m_cqes[head & m_cq_mask];
                 if (cqe->user_data != 0) {
                     const socket_t sock = static_cast<socket_t>(cqe->user_data);
@@ -1271,6 +1273,10 @@ public:
 
         for (const socket_t sock : re_arm_socks) {
             add_socket(sock);
+        }
+
+        if (!had_events && timeout_ms > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
 };
