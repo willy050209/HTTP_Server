@@ -5,10 +5,20 @@ echo ========================================================
 echo Building and Running httplib23 Tests with MSVC (C++23)
 echo ========================================================
 
-call "C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars64.bat" > nul
+where cl.exe >nul 2>nul
 if %errorlevel% neq 0 (
-    echo [ERROR] Failed to load vcvars64.bat environment!
-    exit /b 1
+    if exist "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" (
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" > nul
+    ) else if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" (
+        call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" > nul
+    ) else if exist "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat" (
+        call "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat" > nul
+    ) else if exist "C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars64.bat" (
+        call "C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars64.bat" > nul
+    ) else (
+        echo [ERROR] cl.exe not found and could not find vcvars64.bat!
+        exit /b 1
+    )
 )
 
 echo Compiling tests with MSVC (/std:c++latest /W4 /WX /EHsc /utf-8 /Iinclude)...

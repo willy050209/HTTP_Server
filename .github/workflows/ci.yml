@@ -20,8 +20,13 @@ jobs:
       uses: actions/checkout@v4
 
     # 1. Windows (MSVC C++23)
+    - name: Set up MSVC environment
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+
     - name: Build & Test (Windows)
       if: runner.os == 'Windows'
+      shell: cmd
       run: |
         build_and_test.bat
 
@@ -29,16 +34,16 @@ jobs:
     - name: Build & Test (Linux)
       if: runner.os == 'Linux'
       run: |
-        g++ -std=c++23 -O2 -pthread main.cpp -o server
+        g++ -std=c++23 -O2 -pthread main.cpp -Iinclude -o server
         ./server --test-mode
-        g++ -std=c++23 -O2 -pthread src/test_runner.cpp -o test_runner
+        g++ -std=c++23 -O2 -pthread src/test_runner.cpp -Iinclude -o test_runner
         ./test_runner
 
     # 3. macOS (AppleClang / kqueue C++23)
     - name: Build & Test (macOS)
       if: runner.os == 'macOS'
       run: |
-        clang++ -std=c++23 -O2 main.cpp -o server
+        clang++ -std=c++23 -O2 main.cpp -Iinclude -o server
         ./server --test-mode
-        clang++ -std=c++23 -O2 src/test_runner.cpp -o test_runner
+        clang++ -std=c++23 -O2 src/test_runner.cpp -Iinclude -o test_runner
         ./test_runner
