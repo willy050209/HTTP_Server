@@ -1,13 +1,32 @@
 // filepath: src/test_runner.cpp
 #include <iostream>
 #include <cassert>
-#include <print>
 #include <thread>
 #include <vector>
 #include <atomic>
 #include <chrono>
 #include <format>
 #include <stdexcept>
+
+#if __has_include(<print>) && defined(__cpp_lib_print)
+    #include <print>
+#else
+    namespace std {
+        template <typename... Args>
+        inline void println(std::format_string<Args...> fmt, Args&&... args) {
+            std::cout << std::format(fmt, std::forward<Args>(args)...) << '\n';
+        }
+        template <typename... Args>
+        inline void println(std::FILE* stream, std::format_string<Args...> fmt, Args&&... args) {
+            std::string s = std::format(fmt, std::forward<Args>(args)...) + '\n';
+            std::fputs(s.c_str(), stream);
+        }
+        template <typename... Args>
+        inline void print(std::format_string<Args...> fmt, Args&&... args) {
+            std::cout << std::format(fmt, std::forward<Args>(args)...);
+        }
+    }
+#endif
 #include "../include/httplib23.hpp"
 
 /// <summary>

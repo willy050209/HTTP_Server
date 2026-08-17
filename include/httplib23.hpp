@@ -57,6 +57,7 @@
     #include <fcntl.h>
     #include <netdb.h>
     #include <errno.h>
+    #include <signal.h>
 
     #if defined(__APPLE__) || defined(__MACH__)
         #define HTTPLIB23_PLATFORM_MACOS
@@ -119,7 +120,12 @@
 #include <concepts>
 #include <type_traits>
 #include <format>
-#include <print>
+#if __has_include(<print>) && defined(__cpp_lib_print)
+    #include <print>
+    #define HTTPLIB23_HAS_PRINT 1
+#else
+    #define HTTPLIB23_HAS_PRINT 0
+#endif
 #include <source_location>
 #include <cstdint>
 #include <stdexcept>
@@ -135,6 +141,8 @@ struct NetworkContext {
 #if defined(HTTPLIB23_PLATFORM_WINDOWS)
         WSADATA wsaData;
         WSAStartup(MAKEWORD(2, 2), &wsaData);
+#elif defined(HTTPLIB23_PLATFORM_POSIX)
+        ::signal(SIGPIPE, SIG_IGN);
 #endif
     }
     ~NetworkContext() noexcept {
@@ -500,8 +508,12 @@ private:
                 if (current_sink) {
                     current_sink(log_item.first, log_item.second);
                 } else {
+#if HTTPLIB23_HAS_PRINT
                     std::print("{}", log_item.second);
                     std::fflush(stdout);
+#else
+                    std::cout << log_item.second << std::flush;
+#endif
                 }
             }
         });
@@ -1067,7 +1079,7 @@ public:
 
     bool add_socket(socket_t sock) override {
         epoll_event ev{};
-        ev.events = EPOLLIN | EPOLLET; // Edge-Triggered
+        ev.events = EPOLLIN; // Level-Triggered for 100% reliable read notification
         ev.data.fd = sock;
         return ::epoll_ctl(epoll_fd, EPOLL_CTL_ADD, sock, &ev) == 0;
     }
