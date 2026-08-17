@@ -1254,23 +1254,23 @@ public:
         if (m_ring_fd < 0) return;
         io_uring_enter_syscall(m_ring_fd, 0, 0, 0, nullptr);
 
-        std::vector<socket_t> re_arm_socks;
-        bool had_events = false;
+        struct ReadyEvent {
+            socket_t sock;
+            bool is_read;
+            bool is_write;
+        };
+        std::vector<ReadyEvent> events_to_dispatch;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             uint32_t head = *m_cq_khead;
             while (head != *m_cq_ktail) {
-                had_events = true;
                 struct io_uring_cqe* cqe = &m_cqes[head & m_cq_mask];
                 if (cqe->user_data != 0 && cqe->res > 0) {
                     const socket_t sock = static_cast<socket_t>(cqe->user_data);
                     if (m_active_sockets.contains(sock)) {
                         const bool is_read = (cqe->res & POLLIN) != 0;
                         const bool is_write = (cqe->res & POLLOUT) != 0;
-                        callback(sock, is_read, is_write);
-                        if (m_active_sockets.contains(sock)) {
-                            re_arm_socks.push_back(sock);
-                        }
+                        events_to_dispatch.push_back({sock, is_read, is_write});
                     }
                 }
                 head++;
@@ -1279,11 +1279,32 @@ public:
             *m_cq_khead = head;
         }
 
-        for (const socket_t sock : re_arm_socks) {
-            add_socket(sock);
+        // Dispatch callbacks OUTSIDE m_mutex lock to completely avoid recursive mutex deadlock
+        for (const auto& ev : events_to_dispatch) {
+            callback(ev.sock, ev.is_read, ev.is_write);
+            
+            // Re-arm active socket poll
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_active_sockets.contains(ev.sock)) {
+                uint32_t tail = *m_sq_ktail;
+                uint32_t index = tail & m_sq_mask;
+                struct io_uring_sqe* sqe = &m_sqes[index];
+                std::memset(sqe, 0, sizeof(*sqe));
+                sqe->opcode = IORING_OP_POLL_ADD;
+                sqe->fd = ev.sock;
+                sqe->poll_events = POLLIN;
+                sqe->user_data = static_cast<uint64_t>(ev.sock);
+
+                m_sq_array[index] = index;
+                tail++;
+                std::atomic_thread_fence(std::memory_order_release);
+                *m_sq_ktail = tail;
+
+                io_uring_enter_syscall(m_ring_fd, 1, 0, 0, nullptr);
+            }
         }
 
-        if (!had_events && timeout_ms > 0) {
+        if (events_to_dispatch.empty() && timeout_ms > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
