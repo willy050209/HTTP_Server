@@ -66,6 +66,15 @@
     #elif defined(__linux__)
         #define HTTPLIB23_PLATFORM_LINUX
         #include <sys/epoll.h>
+        #include <poll.h>
+        #if __has_include(<linux/io_uring.h>)
+            #include <linux/io_uring.h>
+            #include <sys/syscall.h>
+            #include <sys/mman.h>
+            #define HTTPLIB23_HAS_IO_URING 1
+        #else
+            #define HTTPLIB23_HAS_IO_URING 0
+        #endif
     #endif
 
     using socket_t = int;
@@ -128,6 +137,7 @@
 #endif
 #include <source_location>
 #include <cstdint>
+#include <cstring>
 #include <stdexcept>
 
 namespace httplib23 {
@@ -1101,11 +1111,7 @@ public:
     }
 };
 
-#if __has_include(<linux/io_uring.h>) && defined(HTTPLIB23_USE_IO_URING)
-#include <linux/io_uring.h>
-#include <sys/syscall.h>
-#include <sys/mman.h>
-#include <poll.h>
+#if HTTPLIB23_HAS_IO_URING && defined(HTTPLIB23_USE_IO_URING)
 
 class IoUringMultiplexer : public IOMultiplexer {
 private:
@@ -1621,7 +1627,7 @@ public:
         }
 
 #if defined(HTTPLIB23_PLATFORM_LINUX)
-#if __has_include(<linux/io_uring.h>) && defined(HTTPLIB23_USE_IO_URING)
+#if HTTPLIB23_HAS_IO_URING && defined(HTTPLIB23_USE_IO_URING)
         m_multiplexer = std::make_unique<detail::IoUringMultiplexer>();
 #else
         m_multiplexer = std::make_unique<detail::EpollMultiplexer>();
