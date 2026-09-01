@@ -43,117 +43,142 @@ void run_worker(const std::string host, const int port, const std::string path,
     server_addr.sin_port = htons(port);
     inet_pton(AF_INET, host.c_str(), &server_addr.sin_addr);
 
-    std::string request = std::format(
+    const std::string request = std::format(
         "GET {} HTTP/1.1\r\n"
         "Host: {}:{}\r\n"
-        "User-Agent: BenchmarkRunner/1.0\r\n"
+        "User-Agent: BenchmarkRunner/2.0\r\n"
         "Accept: */*\r\n"
-        "Connection: close\r\n\r\n",
+        "Connection: keep-alive\r\n\r\n",
         path, host, port
     );
 
-    result.latencies_ms.reserve(50000);
+    result.latencies_ms.reserve(100000);
     char buf[4096];
+    socket_t sock = invalid_sock;
+    std::string rx_buffer;
+    rx_buffer.reserve(8192);
 
-    while (std::chrono::steady_clock::now() < end_time) {
-        const socket_t sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (sock == invalid_sock) {
-            result.fail_count++;
-            std::this_thread::sleep_for(std::chrono::microseconds(500));
-            continue;
+    auto connect_new_socket = [&]() -> bool {
+        if (sock != invalid_sock) {
+            close_sock(sock);
+            sock = invalid_sock;
         }
+        sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (sock == invalid_sock) return false;
 
-        // Set TCP_NODELAY and SO_REUSEADDR for benchmark client
         int flag = 1;
         ::setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&flag), sizeof(flag));
         ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&flag), sizeof(flag));
 
-        // Set SO_LINGER to immediately abort socket without entering TIME_WAIT
         linger sl{ 1, 0 };
         ::setsockopt(sock, SOL_SOCKET, SO_LINGER, reinterpret_cast<const char*>(&sl), sizeof(sl));
 
-        // Set socket send/recv timeouts (1000ms) to prevent hanging
 #if defined(_WIN32) || defined(_WIN64)
-        DWORD timeout_ms = 1000;
+        DWORD timeout_ms = 2000;
         ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
         ::setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
 #else
-        struct timeval tv{ 1, 0 };
+        struct timeval tv{ 2, 0 };
         ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&tv), sizeof(tv));
         ::setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&tv), sizeof(tv));
 #endif
 
-        // Connect timeout
-        const auto t0 = std::chrono::high_resolution_clock::now();
         if (::connect(sock, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) != 0) {
             close_sock(sock);
-            result.fail_count++;
-            std::this_thread::sleep_for(std::chrono::microseconds(500));
-            continue;
+            sock = invalid_sock;
+            return false;
         }
+        rx_buffer.clear();
+        return true;
+    };
+
+    while (std::chrono::steady_clock::now() < end_time) {
+        if (sock == invalid_sock) {
+            if (!connect_new_socket()) {
+                result.fail_count++;
+                std::this_thread::sleep_for(std::chrono::microseconds(500));
+                continue;
+            }
+        }
+
+        const auto t0 = std::chrono::high_resolution_clock::now();
 
         // Send HTTP request
         int sent = ::send(sock, request.c_str(), static_cast<int>(request.size()), 0);
         if (sent <= 0) {
-            close_sock(sock);
+            connect_new_socket();
             result.fail_count++;
             continue;
         }
 
         // Receive response
-        std::string raw_resp;
-        raw_resp.reserve(1024);
         bool completed = false;
         size_t content_len = 0;
         size_t header_len = 0;
         bool header_parsed = false;
+        bool keep_alive = true;
 
-        while (!completed) {
-            int bytes = ::recv(sock, buf, sizeof(buf) - 1, 0);
-            if (bytes <= 0) break;
-            raw_resp.append(buf, bytes);
-
+        while (true) {
             if (!header_parsed) {
-                size_t pos = raw_resp.find("\r\n\r\n");
+                size_t pos = rx_buffer.find("\r\n\r\n");
                 if (pos != std::string::npos) {
                     header_len = pos + 4;
                     header_parsed = true;
-                    size_t cl_pos = raw_resp.find("Content-Length: ");
-                    if (cl_pos == std::string::npos) {
-                        cl_pos = raw_resp.find("content-length: ");
-                    }
-                    if (cl_pos != std::string::npos) {
-                        size_t end_line = raw_resp.find("\r\n", cl_pos);
-                        if (end_line != std::string::npos) {
+                    std::string_view headers(rx_buffer.data(), pos);
+                    size_t cl_pos = headers.find("Content-Length: ");
+                    if (cl_pos == std::string_view::npos) cl_pos = headers.find("content-length: ");
+                    if (cl_pos != std::string_view::npos) {
+                        size_t end_line = headers.find("\r\n", cl_pos);
+                        if (end_line != std::string_view::npos) {
                             try {
-                                content_len = std::stoul(raw_resp.substr(cl_pos + 16, end_line - (cl_pos + 16)));
+                                content_len = std::stoul(std::string(headers.substr(cl_pos + 16, end_line - (cl_pos + 16))));
                             } catch (...) {
                                 content_len = 0;
                             }
                         }
                     }
+                    if (headers.find("Connection: close") != std::string_view::npos ||
+                        headers.find("connection: close") != std::string_view::npos) {
+                        keep_alive = false;
+                    }
                 }
             }
 
-            if (header_parsed) {
-                if (raw_resp.size() >= header_len + content_len) {
-                    completed = true;
-                    break;
-                }
+            if (header_parsed && rx_buffer.size() >= header_len + content_len) {
+                completed = true;
+                break;
             }
+
+            int bytes = ::recv(sock, buf, sizeof(buf), 0);
+            if (bytes <= 0) {
+                break;
+            }
+            rx_buffer.append(buf, bytes);
         }
-        close_sock(sock);
 
         const auto t1 = std::chrono::high_resolution_clock::now();
         const double duration_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
-        if (completed && (raw_resp.find("200 OK") != std::string::npos || raw_resp.find("HTTP/1.1 200") != std::string::npos)) {
+        if (completed && (rx_buffer.find("200 OK") != std::string::npos || rx_buffer.find("HTTP/1.1 200") != std::string::npos)) {
             result.success_count++;
-            result.bytes_transferred += raw_resp.size();
+            const size_t total_req_size = header_len + content_len;
+            result.bytes_transferred += total_req_size;
             result.latencies_ms.push_back(duration_ms);
+            rx_buffer.erase(0, total_req_size);
+
+            if (!keep_alive) {
+                close_sock(sock);
+                sock = invalid_sock;
+            }
         } else {
             result.fail_count++;
+            close_sock(sock);
+            sock = invalid_sock;
         }
+    }
+
+    if (sock != invalid_sock) {
+        close_sock(sock);
     }
 }
 

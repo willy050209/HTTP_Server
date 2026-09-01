@@ -1,8 +1,8 @@
 {
   "cpp_httplib23": {
     "server_name": "httplib23 (C++23 IOCP)",
-    "idle_mem_mb": 10.33984375,
-    "peak_mem_mb": 10.33984375,
+    "idle_mem_mb": 9.70703125,
+    "peak_mem_mb": 10.078125,
     "scenarios": {
       "Plaintext (/plaintext)": {
         "10": {
@@ -10,19 +10,19 @@
           "port": 8181,
           "path": "/plaintext",
           "concurrency": 10,
-          "duration_sec": 5.58,
-          "total_requests": 1015,
-          "successful_requests": 916,
-          "failed_requests": 99,
-          "rps": 164.18,
-          "mb_per_sec": 0.02,
+          "duration_sec": 5.0,
+          "total_requests": 520641,
+          "successful_requests": 520641,
+          "failed_requests": 0,
+          "rps": 104111.72,
+          "mb_per_sec": 14.6,
           "latency_ms": {
-            "min": 0.347,
-            "avg": 5.706,
-            "p50": 0.646,
-            "p90": 15.686,
-            "p99": 31.629,
-            "max": 46.986
+            "min": 0.044,
+            "avg": 0.096,
+            "p50": 0.091,
+            "p90": 0.118,
+            "p99": 0.184,
+            "max": 14.238
           }
         },
         "25": {
@@ -30,19 +30,19 @@
           "port": 8181,
           "path": "/plaintext",
           "concurrency": 25,
-          "duration_sec": 6.19,
-          "total_requests": 75,
-          "successful_requests": 0,
-          "failed_requests": 75,
-          "rps": 0.0,
-          "mb_per_sec": 0.0,
+          "duration_sec": 5.0,
+          "total_requests": 542813,
+          "successful_requests": 542813,
+          "failed_requests": 0,
+          "rps": 108526.23,
+          "mb_per_sec": 15.21,
           "latency_ms": {
-            "min": 0.0,
-            "avg": 0.0,
-            "p50": 0.0,
-            "p90": 0.0,
-            "p99": 0.0,
-            "max": 0.0
+            "min": 0.05,
+            "avg": 0.229,
+            "p50": 0.159,
+            "p90": 0.254,
+            "p99": 0.792,
+            "max": 131.576
           }
         },
         "50": {
@@ -50,19 +50,19 @@
           "port": 8181,
           "path": "/plaintext",
           "concurrency": 50,
-          "duration_sec": 6.21,
-          "total_requests": 150,
-          "successful_requests": 0,
-          "failed_requests": 150,
-          "rps": 0.0,
-          "mb_per_sec": 0.0,
+          "duration_sec": 5.0,
+          "total_requests": 535368,
+          "successful_requests": 535368,
+          "failed_requests": 0,
+          "rps": 107019.24,
+          "mb_per_sec": 15.0,
           "latency_ms": {
-            "min": 0.0,
-            "avg": 0.0,
-            "p50": 0.0,
-            "p90": 0.0,
-            "p99": 0.0,
-            "max": 0.0
+            "min": 0.043,
+            "avg": 0.463,
+            "p50": 0.392,
+            "p90": 0.497,
+            "p99": 1.012,
+            "max": 132.156
           }
         }
       },
@@ -72,19 +72,19 @@
           "port": 8181,
           "path": "/json",
           "concurrency": 10,
-          "duration_sec": 6.2,
-          "total_requests": 30,
-          "successful_requests": 0,
-          "failed_requests": 30,
-          "rps": 0.0,
-          "mb_per_sec": 0.0,
+          "duration_sec": 5.0,
+          "total_requests": 498682,
+          "successful_requests": 498682,
+          "failed_requests": 0,
+          "rps": 99724.82,
+          "mb_per_sec": 19.5,
           "latency_ms": {
-            "min": 0.0,
-            "avg": 0.0,
-            "p50": 0.0,
-            "p90": 0.0,
-            "p99": 0.0,
-            "max": 0.0
+            "min": 0.044,
+            "avg": 0.1,
+            "p50": 0.095,
+            "p90": 0.126,
+            "p99": 0.181,
+            "max": 25.287
           }
         },
         "25": {
@@ -92,19 +92,19 @@
           "port": 8181,
           "path": "/json",
           "concurrency": 25,
-          "duration_sec": 6.2,
-          "total_requests": 75,
-          "successful_requests": 0,
-          "failed_requests": 75,
-          "rps": 0.0,
-          "mb_per_sec": 0.0,
+          "duration_sec": 5.0,
+          "total_requests": 517650,
+          "successful_requests": 517650,
+          "failed_requests": 0,
+          "rps": 103501.19,
+          "mb_per_sec": 20.23,
           "latency_ms": {
-            "min": 0.0,
-            "avg": 0.0,
-            "p50": 0.0,
-            "p90": 0.0,
-            "p99": 0.0,
-            "max": 0.0
+            "min": 0.052,
+            "avg": 0.241,
+            "p50": 0.162,
+            "p90": 0.259,
+            "p99": 0.866,
+            "max": 207.949
           }
         },
         "50": {
@@ -112,19 +112,19 @@
           "port": 8181,
           "path": "/json",
           "concurrency": 50,
-          "duration_sec": 6.19,
-          "total_requests": 150,
-          "successful_requests": 0,
-          "failed_requests": 150,
-          "rps": 0.0,
-          "mb_per_sec": 0.0,
+          "duration_sec": 5.0,
+          "total_requests": 503940,
+          "successful_requests": 503940,
+          "failed_requests": 0,
+          "rps": 100737.48,
+          "mb_per_sec": 19.69,
           "latency_ms": {
-            "min": 0.0,
-            "avg": 0.0,
-            "p50": 0.0,
-            "p90": 0.0,
-            "p99": 0.0,
-            "max": 0.0
+            "min": 0.062,
+            "avg": 0.492,
+            "p50": 0.42,
+            "p90": 0.534,
+            "p99": 1.055,
+            "max": 83.022
           }
         }
       },
@@ -134,19 +134,19 @@
           "port": 8181,
           "path": "/users/123",
           "concurrency": 10,
-          "duration_sec": 6.2,
-          "total_requests": 30,
-          "successful_requests": 0,
-          "failed_requests": 30,
-          "rps": 0.0,
-          "mb_per_sec": 0.0,
+          "duration_sec": 5.0,
+          "total_requests": 464519,
+          "successful_requests": 464519,
+          "failed_requests": 0,
+          "rps": 92891.29,
+          "mb_per_sec": 17.81,
           "latency_ms": {
-            "min": 0.0,
-            "avg": 0.0,
-            "p50": 0.0,
-            "p90": 0.0,
-            "p99": 0.0,
-            "max": 0.0
+            "min": 0.051,
+            "avg": 0.107,
+            "p50": 0.101,
+            "p90": 0.138,
+            "p99": 0.213,
+            "max": 20.726
           }
         },
         "25": {
@@ -154,19 +154,19 @@
           "port": 8181,
           "path": "/users/123",
           "concurrency": 25,
-          "duration_sec": 6.2,
-          "total_requests": 75,
-          "successful_requests": 0,
-          "failed_requests": 75,
-          "rps": 0.0,
-          "mb_per_sec": 0.0,
+          "duration_sec": 5.0,
+          "total_requests": 497594,
+          "successful_requests": 497594,
+          "failed_requests": 0,
+          "rps": 99493.69,
+          "mb_per_sec": 19.07,
           "latency_ms": {
-            "min": 0.0,
-            "avg": 0.0,
-            "p50": 0.0,
-            "p90": 0.0,
-            "p99": 0.0,
-            "max": 0.0
+            "min": 0.049,
+            "avg": 0.25,
+            "p50": 0.176,
+            "p90": 0.277,
+            "p99": 0.812,
+            "max": 109.171
           }
         },
         "50": {
@@ -174,19 +174,19 @@
           "port": 8181,
           "path": "/users/123",
           "concurrency": 50,
-          "duration_sec": 6.19,
-          "total_requests": 150,
-          "successful_requests": 0,
-          "failed_requests": 150,
-          "rps": 0.0,
-          "mb_per_sec": 0.0,
+          "duration_sec": 5.0,
+          "total_requests": 496474,
+          "successful_requests": 496474,
+          "failed_requests": 0,
+          "rps": 99226.31,
+          "mb_per_sec": 19.02,
           "latency_ms": {
-            "min": 0.0,
-            "avg": 0.0,
-            "p50": 0.0,
-            "p90": 0.0,
-            "p99": 0.0,
-            "max": 0.0
+            "min": 0.065,
+            "avg": 0.502,
+            "p50": 0.424,
+            "p90": 0.541,
+            "p99": 1.071,
+            "max": 129.917
           }
         }
       }
@@ -194,8 +194,8 @@
   },
   "dotnet_aspnet": {
     "server_name": "ASP.NET Core (C# .NET 10 Kestrel)",
-    "idle_mem_mb": 60.65625,
-    "peak_mem_mb": 68.90234375,
+    "idle_mem_mb": 65.05078125,
+    "peak_mem_mb": 84.6328125,
     "scenarios": {
       "Plaintext (/plaintext)": {
         "10": {
@@ -204,18 +204,18 @@
           "path": "/plaintext",
           "concurrency": 10,
           "duration_sec": 5.0,
-          "total_requests": 48139,
-          "successful_requests": 48139,
+          "total_requests": 322972,
+          "successful_requests": 322972,
           "failed_requests": 0,
-          "rps": 9625.84,
-          "mb_per_sec": 1.23,
+          "rps": 64575.55,
+          "mb_per_sec": 7.08,
           "latency_ms": {
-            "min": 0.306,
-            "avg": 0.993,
-            "p50": 0.953,
-            "p90": 1.209,
-            "p99": 1.69,
-            "max": 22.699
+            "min": 0.056,
+            "avg": 0.154,
+            "p50": 0.137,
+            "p90": 0.213,
+            "p99": 0.456,
+            "max": 26.746
           }
         },
         "25": {
@@ -224,18 +224,18 @@
           "path": "/plaintext",
           "concurrency": 25,
           "duration_sec": 5.0,
-          "total_requests": 50328,
-          "successful_requests": 50328,
+          "total_requests": 365965,
+          "successful_requests": 365965,
           "failed_requests": 0,
-          "rps": 10061.22,
-          "mb_per_sec": 1.29,
+          "rps": 73169.34,
+          "mb_per_sec": 8.02,
           "latency_ms": {
-            "min": 0.299,
-            "avg": 2.437,
-            "p50": 2.377,
-            "p90": 2.797,
-            "p99": 3.466,
-            "max": 16.16
+            "min": 0.081,
+            "avg": 0.341,
+            "p50": 0.244,
+            "p90": 0.407,
+            "p99": 2.152,
+            "max": 73.054
           }
         },
         "50": {
@@ -243,19 +243,19 @@
           "port": 8182,
           "path": "/plaintext",
           "concurrency": 50,
-          "duration_sec": 5.01,
-          "total_requests": 48489,
-          "successful_requests": 48489,
+          "duration_sec": 5.0,
+          "total_requests": 372134,
+          "successful_requests": 372134,
           "failed_requests": 0,
-          "rps": 9688.03,
-          "mb_per_sec": 1.24,
+          "rps": 74378.09,
+          "mb_per_sec": 8.16,
           "latency_ms": {
-            "min": 0.323,
-            "avg": 5.105,
-            "p50": 5.041,
-            "p90": 5.59,
-            "p99": 6.751,
-            "max": 20.172
+            "min": 0.086,
+            "avg": 0.669,
+            "p50": 0.434,
+            "p90": 0.737,
+            "p99": 7.169,
+            "max": 73.629
           }
         }
       },
@@ -266,18 +266,18 @@
           "path": "/json",
           "concurrency": 10,
           "duration_sec": 5.0,
-          "total_requests": 48920,
-          "successful_requests": 48920,
-          "failed_requests": 0,
-          "rps": 9781.66,
-          "mb_per_sec": 1.95,
+          "total_requests": 72656,
+          "successful_requests": 36454,
+          "failed_requests": 36202,
+          "rps": 7288.96,
+          "mb_per_sec": 0.91,
           "latency_ms": {
-            "min": 0.339,
-            "avg": 0.975,
-            "p50": 0.934,
-            "p90": 1.133,
-            "p99": 1.753,
-            "max": 15.747
+            "min": 0.01,
+            "avg": 0.87,
+            "p50": 0.779,
+            "p90": 1.138,
+            "p99": 2.555,
+            "max": 24.615
           }
         },
         "25": {
@@ -286,18 +286,18 @@
           "path": "/json",
           "concurrency": 25,
           "duration_sec": 5.0,
-          "total_requests": 48841,
-          "successful_requests": 48841,
-          "failed_requests": 0,
-          "rps": 9762.1,
-          "mb_per_sec": 1.95,
+          "total_requests": 80667,
+          "successful_requests": 40409,
+          "failed_requests": 40258,
+          "rps": 8077.46,
+          "mb_per_sec": 1.01,
           "latency_ms": {
-            "min": 0.321,
-            "avg": 2.51,
-            "p50": 2.432,
-            "p90": 2.952,
-            "p99": 3.497,
-            "max": 26.467
+            "min": 0.009,
+            "avg": 2.67,
+            "p50": 2.545,
+            "p90": 3.113,
+            "p99": 4.142,
+            "max": 25.044
           }
         },
         "50": {
@@ -306,18 +306,18 @@
           "path": "/json",
           "concurrency": 50,
           "duration_sec": 5.01,
-          "total_requests": 47707,
-          "successful_requests": 47707,
-          "failed_requests": 0,
-          "rps": 9531.74,
-          "mb_per_sec": 1.9,
+          "total_requests": 78758,
+          "successful_requests": 39498,
+          "failed_requests": 39260,
+          "rps": 7888.93,
+          "mb_per_sec": 0.98,
           "latency_ms": {
-            "min": 0.318,
-            "avg": 5.188,
-            "p50": 5.083,
-            "p90": 5.758,
-            "p99": 7.216,
-            "max": 24.866
+            "min": 0.008,
+            "avg": 5.855,
+            "p50": 5.729,
+            "p90": 6.655,
+            "p99": 8.546,
+            "max": 26.277
           }
         }
       },
@@ -328,18 +328,18 @@
           "path": "/users/123",
           "concurrency": 10,
           "duration_sec": 5.0,
-          "total_requests": 47965,
-          "successful_requests": 47965,
-          "failed_requests": 0,
-          "rps": 9590.9,
-          "mb_per_sec": 1.87,
+          "total_requests": 81343,
+          "successful_requests": 40742,
+          "failed_requests": 40601,
+          "rps": 8145.74,
+          "mb_per_sec": 1.02,
           "latency_ms": {
-            "min": 0.302,
-            "avg": 0.995,
-            "p50": 0.946,
-            "p90": 1.164,
-            "p99": 1.82,
-            "max": 15.834
+            "min": 0.018,
+            "avg": 0.834,
+            "p50": 0.79,
+            "p90": 1.004,
+            "p99": 1.871,
+            "max": 16.958
           }
         },
         "25": {
@@ -348,18 +348,18 @@
           "path": "/users/123",
           "concurrency": 25,
           "duration_sec": 5.0,
-          "total_requests": 47460,
-          "successful_requests": 47460,
-          "failed_requests": 0,
-          "rps": 9485.27,
-          "mb_per_sec": 1.85,
+          "total_requests": 80358,
+          "successful_requests": 40256,
+          "failed_requests": 40102,
+          "rps": 8046.78,
+          "mb_per_sec": 1.0,
           "latency_ms": {
-            "min": 0.347,
-            "avg": 2.584,
-            "p50": 2.485,
-            "p90": 3.061,
-            "p99": 3.804,
-            "max": 17.151
+            "min": 0.016,
+            "avg": 2.672,
+            "p50": 2.579,
+            "p90": 3.191,
+            "p99": 4.02,
+            "max": 24.794
           }
         },
         "50": {
@@ -368,18 +368,18 @@
           "path": "/users/123",
           "concurrency": 50,
           "duration_sec": 5.01,
-          "total_requests": 40666,
-          "successful_requests": 40666,
-          "failed_requests": 0,
-          "rps": 8121.97,
-          "mb_per_sec": 1.59,
+          "total_requests": 80423,
+          "successful_requests": 40283,
+          "failed_requests": 40140,
+          "rps": 8046.53,
+          "mb_per_sec": 1.0,
           "latency_ms": {
-            "min": 0.371,
-            "avg": 6.082,
-            "p50": 5.876,
-            "p90": 7.135,
-            "p99": 11.004,
-            "max": 27.957
+            "min": 0.012,
+            "avg": 5.771,
+            "p50": 5.664,
+            "p90": 6.483,
+            "p99": 7.204,
+            "max": 27.654
           }
         }
       }
@@ -387,8 +387,8 @@
   },
   "python_fastapi": {
     "server_name": "FastAPI (Python 3.12 Uvicorn)",
-    "idle_mem_mb": 68.2734375,
-    "peak_mem_mb": 75.35546875,
+    "idle_mem_mb": 56.8203125,
+    "peak_mem_mb": 63.55859375,
     "scenarios": {
       "Plaintext (/plaintext)": {
         "10": {
@@ -397,18 +397,18 @@
           "path": "/plaintext",
           "concurrency": 10,
           "duration_sec": 5.0,
-          "total_requests": 6833,
-          "successful_requests": 6833,
+          "total_requests": 14140,
+          "successful_requests": 14140,
           "failed_requests": 0,
-          "rps": 1365.29,
-          "mb_per_sec": 0.22,
+          "rps": 2826.2,
+          "mb_per_sec": 0.4,
           "latency_ms": {
-            "min": 5.139,
-            "avg": 7.251,
-            "p50": 6.842,
-            "p90": 8.615,
-            "p99": 13.839,
-            "max": 26.094
+            "min": 1.311,
+            "avg": 3.533,
+            "p50": 3.183,
+            "p90": 4.59,
+            "p99": 12.718,
+            "max": 26.102
           }
         },
         "25": {
@@ -416,19 +416,19 @@
           "port": 8183,
           "path": "/plaintext",
           "concurrency": 25,
-          "duration_sec": 5.02,
-          "total_requests": 6632,
-          "successful_requests": 6632,
+          "duration_sec": 5.01,
+          "total_requests": 10403,
+          "successful_requests": 10403,
           "failed_requests": 0,
-          "rps": 1322.06,
-          "mb_per_sec": 0.21,
+          "rps": 2077.1,
+          "mb_per_sec": 0.29,
           "latency_ms": {
-            "min": 5.132,
-            "avg": 18.819,
-            "p50": 18.214,
-            "p90": 22.186,
-            "p99": 28.947,
-            "max": 33.156
+            "min": 3.3,
+            "avg": 12.002,
+            "p50": 11.538,
+            "p90": 16.205,
+            "p99": 28.713,
+            "max": 43.371
           }
         },
         "50": {
@@ -436,19 +436,19 @@
           "port": 8183,
           "path": "/plaintext",
           "concurrency": 50,
-          "duration_sec": 5.05,
-          "total_requests": 6390,
-          "successful_requests": 6390,
+          "duration_sec": 5.02,
+          "total_requests": 8574,
+          "successful_requests": 8574,
           "failed_requests": 0,
-          "rps": 1266.59,
-          "mb_per_sec": 0.2,
+          "rps": 1709.13,
+          "mb_per_sec": 0.24,
           "latency_ms": {
-            "min": 7.437,
-            "avg": 39.231,
-            "p50": 38.15,
-            "p90": 46.513,
-            "p99": 63.277,
-            "max": 71.678
+            "min": 6.042,
+            "avg": 29.121,
+            "p50": 29.277,
+            "p90": 36.212,
+            "p99": 47.923,
+            "max": 162.235
           }
         }
       },
@@ -459,18 +459,18 @@
           "path": "/json",
           "concurrency": 10,
           "duration_sec": 5.0,
-          "total_requests": 6829,
-          "successful_requests": 6829,
+          "total_requests": 14897,
+          "successful_requests": 14897,
           "failed_requests": 0,
-          "rps": 1364.7,
-          "mb_per_sec": 0.25,
+          "rps": 2977.89,
+          "mb_per_sec": 0.5,
           "latency_ms": {
-            "min": 4.311,
-            "avg": 7.278,
-            "p50": 6.897,
-            "p90": 8.807,
-            "p99": 13.859,
-            "max": 22.299
+            "min": 1.315,
+            "avg": 3.352,
+            "p50": 3.139,
+            "p90": 4.089,
+            "p99": 11.271,
+            "max": 22.497
           }
         },
         "25": {
@@ -478,19 +478,19 @@
           "port": 8183,
           "path": "/json",
           "concurrency": 25,
-          "duration_sec": 5.02,
-          "total_requests": 6651,
-          "successful_requests": 6651,
+          "duration_sec": 5.01,
+          "total_requests": 13901,
+          "successful_requests": 13901,
           "failed_requests": 0,
-          "rps": 1325.4,
-          "mb_per_sec": 0.25,
+          "rps": 2775.1,
+          "mb_per_sec": 0.46,
           "latency_ms": {
-            "min": 6.224,
-            "avg": 18.77,
-            "p50": 18.215,
-            "p90": 21.76,
-            "p99": 30.437,
-            "max": 34.196
+            "min": 3.341,
+            "avg": 8.985,
+            "p50": 8.546,
+            "p90": 10.444,
+            "p99": 16.611,
+            "max": 36.966
           }
         },
         "50": {
@@ -498,19 +498,19 @@
           "port": 8183,
           "path": "/json",
           "concurrency": 50,
-          "duration_sec": 5.04,
-          "total_requests": 6624,
-          "successful_requests": 6624,
+          "duration_sec": 5.01,
+          "total_requests": 14800,
+          "successful_requests": 14800,
           "failed_requests": 0,
-          "rps": 1315.41,
-          "mb_per_sec": 0.24,
+          "rps": 2952.73,
+          "mb_per_sec": 0.49,
           "latency_ms": {
-            "min": 5.644,
-            "avg": 37.788,
-            "p50": 36.656,
-            "p90": 42.512,
-            "p99": 55.083,
-            "max": 72.973
+            "min": 5.752,
+            "avg": 16.874,
+            "p50": 16.182,
+            "p90": 19.114,
+            "p99": 28.205,
+            "max": 105.102
           }
         }
       },
@@ -520,19 +520,19 @@
           "port": 8183,
           "path": "/users/123",
           "concurrency": 10,
-          "duration_sec": 5.01,
-          "total_requests": 5632,
-          "successful_requests": 5632,
+          "duration_sec": 5.0,
+          "total_requests": 13954,
+          "successful_requests": 13954,
           "failed_requests": 0,
-          "rps": 1125.18,
-          "mb_per_sec": 0.2,
+          "rps": 2789.69,
+          "mb_per_sec": 0.45,
           "latency_ms": {
-            "min": 5.564,
-            "avg": 8.838,
-            "p50": 7.645,
-            "p90": 12.599,
-            "p99": 24.682,
-            "max": 50.687
+            "min": 1.364,
+            "avg": 3.578,
+            "p50": 3.305,
+            "p90": 4.472,
+            "p99": 11.06,
+            "max": 17.577
           }
         },
         "25": {
@@ -540,19 +540,19 @@
           "port": 8183,
           "path": "/users/123",
           "concurrency": 25,
-          "duration_sec": 5.02,
-          "total_requests": 6631,
-          "successful_requests": 6631,
+          "duration_sec": 5.01,
+          "total_requests": 14212,
+          "successful_requests": 14212,
           "failed_requests": 0,
-          "rps": 1321.58,
-          "mb_per_sec": 0.24,
+          "rps": 2838.46,
+          "mb_per_sec": 0.46,
           "latency_ms": {
-            "min": 6.955,
-            "avg": 18.831,
-            "p50": 18.068,
-            "p90": 21.991,
-            "p99": 30.84,
-            "max": 37.095
+            "min": 3.579,
+            "avg": 8.789,
+            "p50": 8.426,
+            "p90": 10.626,
+            "p99": 18.594,
+            "max": 39.297
           }
         },
         "50": {
@@ -560,19 +560,19 @@
           "port": 8183,
           "path": "/users/123",
           "concurrency": 50,
-          "duration_sec": 5.06,
-          "total_requests": 4583,
-          "successful_requests": 4583,
+          "duration_sec": 5.01,
+          "total_requests": 14153,
+          "successful_requests": 14153,
           "failed_requests": 0,
-          "rps": 905.89,
-          "mb_per_sec": 0.16,
+          "rps": 2822.97,
+          "mb_per_sec": 0.46,
           "latency_ms": {
-            "min": 7.798,
-            "avg": 54.761,
-            "p50": 56.959,
-            "p90": 74.652,
-            "p99": 90.658,
-            "max": 112.362
+            "min": 4.8,
+            "avg": 17.658,
+            "p50": 16.942,
+            "p90": 20.063,
+            "p99": 28.985,
+            "max": 103.216
           }
         }
       }

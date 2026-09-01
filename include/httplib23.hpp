@@ -651,6 +651,8 @@ struct Response {
         headers["Location"] = std::string(location);
     }
 
+    bool keep_alive = true;
+
     [[nodiscard]] std::string serialize_headers() const {
         std::string res;
         res.reserve(256 + headers.size() * 64);
@@ -674,7 +676,11 @@ struct Response {
             res += "Server: httplib23/1.0 (C++23 Modern Engine)\r\n";
         }
         if (!has_connection) {
-            res += "Connection: close\r\n";
+            if (keep_alive) {
+                res += "Connection: keep-alive\r\n";
+            } else {
+                res += "Connection: close\r\n";
+            }
         }
         res += "\r\n";
         return res;
@@ -1431,9 +1437,23 @@ public:
 // 8. Connection Session State Machine (Data-Race-Free Atomic Timestamp)
 // ============================================================================
 
+#if defined(HTTPLIB23_PLATFORM_WINDOWS)
+enum class IOOperation : uint8_t { READ, WRITE };
+
+struct PerIoData {
+    WSAOVERLAPPED overlapped;
+    WSABUF wsa_bufs[2];
+    char buffer[8192];
+    IOOperation op_type = IOOperation::READ;
+    socket_t socket = invalid_socket;
+    std::string send_header_buf;
+    std::string send_body_buf;
+};
+#endif
+
 struct ConnectionSession {
     socket_t socket = invalid_socket;
-    std::vector<char> rx_buffer;
+    std::string rx_buffer;
     std::atomic<int64_t> last_active_ms{
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()
@@ -1442,6 +1462,13 @@ struct ConnectionSession {
     bool header_parsed = false;
     size_t content_length = 0;
     size_t header_length = 0;
+    bool keep_alive = true;
+
+#if defined(HTTPLIB23_PLATFORM_WINDOWS)
+    PerIoData read_io{};
+    PerIoData write_io{};
+    std::atomic<bool> is_writing{false};
+#endif
 
     void touch() noexcept {
         last_active_ms.store(
@@ -1482,18 +1509,6 @@ private:
 #if defined(HTTPLIB23_PLATFORM_WINDOWS)
     HANDLE m_iocp = INVALID_HANDLE_VALUE;
     std::vector<std::thread> m_iocp_threads;
-
-    enum class IOOperation : uint8_t { READ, WRITE };
-
-    struct PerIoData {
-        WSAOVERLAPPED overlapped;
-        WSABUF wsa_bufs[2];
-        char buffer[8192];
-        IOOperation op_type;
-        socket_t socket;
-        std::string send_header_buf;
-        std::string send_body_buf;
-    };
 #else
     std::unique_ptr<detail::IOMultiplexer> m_multiplexer;
     std::thread m_poll_thread;
@@ -1746,32 +1761,39 @@ private:
                 continue;
             }
 
+            int nodelay = 1;
+            ::setsockopt(client_socket, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&nodelay), sizeof(nodelay));
+
+            auto session = std::make_shared<ConnectionSession>();
+            session->socket = client_socket;
+            session->keep_alive = true;
+            session->rx_buffer.reserve(4096);
+
+            ZeroMemory(&session->read_io.overlapped, sizeof(OVERLAPPED));
+            session->read_io.op_type = IOOperation::READ;
+            session->read_io.socket = client_socket;
+            session->read_io.wsa_bufs[0].buf = session->read_io.buffer;
+            session->read_io.wsa_bufs[0].len = sizeof(session->read_io.buffer);
+
+            ZeroMemory(&session->write_io.overlapped, sizeof(OVERLAPPED));
+            session->write_io.op_type = IOOperation::WRITE;
+            session->write_io.socket = client_socket;
+
             if (CreateIoCompletionPort(reinterpret_cast<HANDLE>(client_socket), m_iocp, static_cast<ULONG_PTR>(client_socket), 0) == NULL) {
                 close_socket(client_socket);
                 continue;
             }
 
-            auto session = std::make_shared<ConnectionSession>();
-            session->socket = client_socket;
             {
                 std::lock_guard<std::mutex> lock(m_session_mutex);
                 m_sessions[client_socket] = session;
             }
 
-            auto io_data = std::make_unique<PerIoData>();
-            ZeroMemory(&io_data->overlapped, sizeof(OVERLAPPED));
-            io_data->op_type = IOOperation::READ;
-            io_data->socket = client_socket;
-            io_data->wsa_bufs[0].buf = io_data->buffer;
-            io_data->wsa_bufs[0].len = sizeof(io_data->buffer);
-
             DWORD flags = 0;
             DWORD bytes_recv = 0;
-            PerIoData* raw_ptr = io_data.release();
-            if (WSARecv(client_socket, &raw_ptr->wsa_bufs[0], 1, &bytes_recv, &flags, &raw_ptr->overlapped, NULL) == SOCKET_ERROR) {
+            if (WSARecv(client_socket, &session->read_io.wsa_bufs[0], 1, &bytes_recv, &flags, &session->read_io.overlapped, NULL) == SOCKET_ERROR) {
                 if (WSAGetLastError() != ERROR_IO_PENDING) {
                     remove_session(client_socket);
-                    delete raw_ptr;
                 }
             }
         }
@@ -1793,6 +1815,8 @@ private:
                             }
 
                             set_nonblocking(client_sock);
+                            int nodelay = 1;
+                            ::setsockopt(client_sock, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&nodelay), sizeof(nodelay));
 #if defined(HTTPLIB23_PLATFORM_MACOS)
                             int opt = 1;
                             ::setsockopt(client_sock, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof(opt));
@@ -1800,6 +1824,8 @@ private:
 
                             auto session = std::make_shared<ConnectionSession>();
                             session->socket = client_sock;
+                            session->keep_alive = true;
+                            session->rx_buffer.reserve(4096);
                             {
                                 std::lock_guard<std::mutex> lock(m_session_mutex);
                                 m_sessions[client_sock] = session;
@@ -1828,7 +1854,7 @@ private:
                         while (true) {
                             const ssize_t bytes_read = ::recv(fd, buf, sizeof(buf), 0);
                             if (bytes_read > 0) {
-                                session->rx_buffer.insert(session->rx_buffer.end(), buf, buf + bytes_read);
+                                session->rx_buffer.append(buf, bytes_read);
                             } else if (bytes_read == 0) {
                                 client_closed = true;
                                 break;
@@ -1850,7 +1876,7 @@ private:
 
                         bool should_disconnect = false;
                         while (true) {
-                            const std::string_view rx_sv(session->rx_buffer.data(), session->rx_buffer.size());
+                            const std::string_view rx_sv(session->rx_buffer);
                             
                             if (!session->header_parsed) {
                                 const size_t header_end = rx_sv.find("\r\n\r\n");
@@ -1859,15 +1885,16 @@ private:
                                     session->header_parsed = true;
                                     const std::string_view header_sv = rx_sv.substr(0, header_end);
                                     session->content_length = parse_content_length(header_sv);
+                                    session->keep_alive = parse_keep_alive(header_sv);
 
                                     if (session->content_length > MAX_BODY_SIZE || session->header_length > MAX_HEADER_SIZE) {
-                                        send_error_response(fd, 413, "Payload Too Large");
+                                        send_error_response(session.get(), 413, "Payload Too Large");
                                         should_disconnect = true;
                                         break;
                                     }
                                 } else {
                                     if (session->rx_buffer.size() > MAX_HEADER_SIZE) {
-                                        send_error_response(fd, 413, "Header Size Exceeds Limit");
+                                        send_error_response(session.get(), 413, "Header Size Exceeds Limit");
                                         should_disconnect = true;
                                     }
                                     break;
@@ -1877,21 +1904,13 @@ private:
                             if (session->header_parsed) {
                                 const size_t total_expected = session->header_length + session->content_length;
                                 if (session->rx_buffer.size() >= total_expected) {
-                                    std::string full_request(session->rx_buffer.data(), total_expected);
-                                    session->rx_buffer.erase(session->rx_buffer.begin(), session->rx_buffer.begin() + total_expected);
+                                    std::string full_request = session->rx_buffer.substr(0, total_expected);
+                                    session->rx_buffer.erase(0, total_expected);
                                     session->header_parsed = false;
                                     session->content_length = 0;
                                     session->header_length = 0;
 
-                                    const bool queued = m_pool->enqueue([this, fd, req_str = std::move(full_request)]() {
-                                        handle_http_request(fd, req_str);
-                                    });
-
-                                    if (!queued) {
-                                        send_error_response(fd, 503, "Service Unavailable - Server Busy");
-                                        should_disconnect = true;
-                                        break;
-                                    }
+                                    handle_http_request(session.get(), full_request);
                                 } else {
                                     break;
                                 }
@@ -1965,40 +1984,32 @@ private:
 
             if (!m_running && overlapped == NULL) break;
 
-            if (!result || bytes_transferred == 0) {
-                if (overlapped) {
-                    PerIoData* io_data = CONTAINING_RECORD(overlapped, PerIoData, overlapped);
-                    remove_session(io_data->socket);
-                    delete io_data;
+            const socket_t client_socket = static_cast<socket_t>(completion_key);
+            std::shared_ptr<ConnectionSession> session;
+            {
+                std::lock_guard<std::mutex> lock(m_session_mutex);
+                const auto it = m_sessions.find(client_socket);
+                if (it != m_sessions.end()) {
+                    session = it->second;
                 }
+            }
+
+            if (!session) continue;
+
+            if (!result || bytes_transferred == 0) {
+                remove_session(client_socket);
                 continue;
             }
 
             PerIoData* io_data = CONTAINING_RECORD(overlapped, PerIoData, overlapped);
-            const socket_t client_socket = io_data->socket;
 
             if (io_data->op_type == IOOperation::READ) {
-                std::shared_ptr<ConnectionSession> session;
-                {
-                    std::lock_guard<std::mutex> lock(m_session_mutex);
-                    const auto it = m_sessions.find(client_socket);
-                    if (it != m_sessions.end()) {
-                        session = it->second;
-                    }
-                }
-
-                if (!session) {
-                    delete io_data;
-                    continue;
-                }
-
                 session->touch();
-                session->rx_buffer.insert(session->rx_buffer.end(), io_data->buffer, io_data->buffer + bytes_transferred);
-                delete io_data;
+                session->rx_buffer.append(io_data->buffer, bytes_transferred);
 
                 bool should_disconnect = false;
                 while (true) {
-                    const std::string_view rx_sv(session->rx_buffer.data(), session->rx_buffer.size());
+                    const std::string_view rx_sv(session->rx_buffer);
                     
                     if (!session->header_parsed) {
                         const size_t header_end = rx_sv.find("\r\n\r\n");
@@ -2007,15 +2018,16 @@ private:
                             session->header_parsed = true;
                             const std::string_view header_sv = rx_sv.substr(0, header_end);
                             session->content_length = parse_content_length(header_sv);
+                            session->keep_alive = parse_keep_alive(header_sv);
 
                             if (session->content_length > MAX_BODY_SIZE || session->header_length > MAX_HEADER_SIZE) {
-                                send_error_response(client_socket, 413, "Payload Too Large");
+                                send_error_response(session.get(), 413, "Payload Too Large");
                                 should_disconnect = true;
                                 break;
                             }
                         } else {
                             if (session->rx_buffer.size() > MAX_HEADER_SIZE) {
-                                send_error_response(client_socket, 413, "Header Size Exceeds Limit");
+                                send_error_response(session.get(), 413, "Header Size Exceeds Limit");
                                 should_disconnect = true;
                             }
                             break;
@@ -2025,21 +2037,13 @@ private:
                     if (session->header_parsed) {
                         const size_t total_expected = session->header_length + session->content_length;
                         if (session->rx_buffer.size() >= total_expected) {
-                            std::string full_request(session->rx_buffer.data(), total_expected);
-                            session->rx_buffer.erase(session->rx_buffer.begin(), session->rx_buffer.begin() + total_expected);
+                            std::string full_request = session->rx_buffer.substr(0, total_expected);
+                            session->rx_buffer.erase(0, total_expected);
                             session->header_parsed = false;
                             session->content_length = 0;
                             session->header_length = 0;
 
-                            const bool queued = m_pool->enqueue([this, client_socket, req_str = std::move(full_request)]() {
-                                handle_http_request(client_socket, req_str);
-                            });
-
-                            if (!queued) {
-                                send_error_response(client_socket, 503, "Service Unavailable - Server Busy");
-                                should_disconnect = true;
-                                break;
-                            }
+                            handle_http_request(session.get(), full_request);
                         } else {
                             break;
                         }
@@ -2051,25 +2055,19 @@ private:
                     continue;
                 }
 
-                auto next_io = std::make_unique<PerIoData>();
-                ZeroMemory(&next_io->overlapped, sizeof(OVERLAPPED));
-                next_io->op_type = IOOperation::READ;
-                next_io->socket = client_socket;
-                next_io->wsa_bufs[0].buf = next_io->buffer;
-                next_io->wsa_bufs[0].len = sizeof(next_io->buffer);
-
+                ZeroMemory(&session->read_io.overlapped, sizeof(OVERLAPPED));
                 DWORD flags = 0;
                 DWORD next_recv = 0;
-                PerIoData* raw_next = next_io.release();
-                if (WSARecv(client_socket, &raw_next->wsa_bufs[0], 1, &next_recv, &flags, &raw_next->overlapped, NULL) == SOCKET_ERROR) {
+                if (WSARecv(client_socket, &session->read_io.wsa_bufs[0], 1, &next_recv, &flags, &session->read_io.overlapped, NULL) == SOCKET_ERROR) {
                     if (WSAGetLastError() != ERROR_IO_PENDING) {
                         remove_session(client_socket);
-                        delete raw_next;
                     }
                 }
             } else if (io_data->op_type == IOOperation::WRITE) {
-                remove_session(client_socket);
-                delete io_data;
+                session->is_writing.store(false, std::memory_order_release);
+                if (!session->keep_alive) {
+                    remove_session(client_socket);
+                }
             }
         }
     }
@@ -2096,35 +2094,58 @@ private:
         return 0;
     }
 
-    void send_error_response(const socket_t client_socket, const int32_t status_code, const std::string_view msg) noexcept {
+    [[nodiscard]] static bool parse_keep_alive(const std::string_view header_sv) noexcept {
+        size_t pos = 0;
+        while (pos < header_sv.size()) {
+            size_t line_end = header_sv.find("\r\n", pos);
+            if (line_end == std::string_view::npos) line_end = header_sv.size();
+            const std::string_view line = header_sv.substr(pos, line_end - pos);
+            const size_t colon = line.find(':');
+            if (colon != std::string_view::npos) {
+                const std::string_view key = detail::trim(line.substr(0, colon));
+                if (CaseInsensitiveCompare{}(key, "Connection")) {
+                    const std::string_view val = detail::trim(line.substr(colon + 1));
+                    if (CaseInsensitiveCompare{}(val, "close")) {
+                        return false;
+                    }
+                    if (CaseInsensitiveCompare{}(val, "keep-alive")) {
+                        return true;
+                    }
+                }
+            }
+            pos = line_end + 2;
+        }
+        return true;
+    }
+
+    void send_error_response(ConnectionSession* session, const int32_t status_code, const std::string_view msg) noexcept {
+        if (!session) return;
         Response res;
         res.status = status_code;
         res.set_content(msg, "text/plain");
-        send_response_scatter(client_socket, res);
+        send_response_scatter(session, res);
     }
 
-    void send_response_scatter(const socket_t client_socket, const Response& res) noexcept {
+    void send_response_scatter(ConnectionSession* session, Response& res) noexcept {
+        if (!session) return;
+        res.keep_alive = session->keep_alive;
 #if defined(HTTPLIB23_PLATFORM_WINDOWS)
-        auto send_io = std::make_unique<PerIoData>();
-        ZeroMemory(&send_io->overlapped, sizeof(OVERLAPPED));
-        send_io->op_type = IOOperation::WRITE;
-        send_io->socket = client_socket;
+        session->write_io.send_header_buf = res.serialize_headers();
+        session->write_io.send_body_buf = std::move(res.body);
 
-        send_io->send_header_buf = res.serialize_headers();
-        send_io->send_body_buf = res.body;
+        session->write_io.wsa_bufs[0].buf = session->write_io.send_header_buf.data();
+        session->write_io.wsa_bufs[0].len = static_cast<ULONG>(session->write_io.send_header_buf.size());
 
-        send_io->wsa_bufs[0].buf = send_io->send_header_buf.data();
-        send_io->wsa_bufs[0].len = static_cast<ULONG>(send_io->send_header_buf.size());
+        session->write_io.wsa_bufs[1].buf = session->write_io.send_body_buf.data();
+        session->write_io.wsa_bufs[1].len = static_cast<ULONG>(session->write_io.send_body_buf.size());
 
-        send_io->wsa_bufs[1].buf = send_io->send_body_buf.data();
-        send_io->wsa_bufs[1].len = static_cast<ULONG>(send_io->send_body_buf.size());
+        ZeroMemory(&session->write_io.overlapped, sizeof(OVERLAPPED));
+        session->is_writing.store(true, std::memory_order_release);
 
         DWORD bytes_sent = 0;
-        PerIoData* raw_send = send_io.release();
-        if (WSASend(client_socket, raw_send->wsa_bufs, 2, &bytes_sent, 0, &raw_send->overlapped, NULL) == SOCKET_ERROR) {
+        if (WSASend(session->socket, session->write_io.wsa_bufs, 2, &bytes_sent, 0, &session->write_io.overlapped, NULL) == SOCKET_ERROR) {
             if (WSAGetLastError() != ERROR_IO_PENDING) {
-                remove_session(client_socket);
-                delete raw_send;
+                remove_session(session->socket);
             }
         }
 #else
@@ -2135,14 +2156,17 @@ private:
         iov[1].iov_base = const_cast<char*>(res.body.data());
         iov[1].iov_len = res.body.size();
 
-        const ssize_t bytes_written = ::writev(client_socket, iov, 2);
+        const ssize_t bytes_written = ::writev(session->socket, iov, 2);
         (void)bytes_written;
-        ::shutdown(client_socket, SHUT_WR);
-        remove_session(client_socket);
+        if (!session->keep_alive) {
+            ::shutdown(session->socket, SHUT_WR);
+            remove_session(session->socket);
+        }
 #endif
     }
 
-    void handle_http_request(const socket_t client_socket, const std::string& request_str) noexcept {
+    void handle_http_request(ConnectionSession* session, const std::string& request_str) noexcept {
+        if (!session) return;
         Request req;
         Response res;
 
@@ -2218,7 +2242,7 @@ private:
             }
         }
 
-        send_response_scatter(client_socket, res);
+        send_response_scatter(session, res);
     }
 };
 
