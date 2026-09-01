@@ -1,6 +1,28 @@
+# MSVC build artifacts
 *.obj
 *.exe
 *.pdb
 *.ilk
 *.idb
+*.lib
+*.exp
 .vs/
+x64/
+Debug/
+Release/
+
+# .NET artifacts
+bin/
+obj/
+*.user
+*.suo
+
+# Python artifacts
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Test runners
+test_runner.exe
+test_runner.obj

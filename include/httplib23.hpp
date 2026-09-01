@@ -22,6 +22,7 @@
     #include <ws2tcpip.h>
     #include <mswsock.h>
     #include <crtdbg.h>
+    #include <cstddef>
 
     #pragma comment(lib, "ws2_32.lib")
 
@@ -1935,17 +1936,15 @@ private:
 
     void remove_session(const socket_t sock) noexcept {
         std::lock_guard<std::mutex> lock(m_session_mutex);
-        if (m_sessions.contains(sock)) {
+        const auto it = m_sessions.find(sock);
+        if (it != m_sessions.end()) {
 #if defined(HTTPLIB23_PLATFORM_POSIX)
             if (m_multiplexer) {
                 m_multiplexer->remove_socket(sock);
             }
 #endif
-            char dummy[512];
-            set_nonblocking(sock);
-            while (::recv(sock, dummy, sizeof(dummy), 0) > 0) {}
             close_socket(sock);
-            m_sessions.erase(sock);
+            m_sessions.erase(it);
         }
     }
 
@@ -2069,7 +2068,6 @@ private:
                     }
                 }
             } else if (io_data->op_type == IOOperation::WRITE) {
-                shutdown(client_socket, SD_SEND);
                 remove_session(client_socket);
                 delete io_data;
             }
