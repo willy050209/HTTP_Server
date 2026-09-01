@@ -117,6 +117,8 @@ void run_worker(const std::string host, const int port, const std::string path,
         size_t header_len = 0;
         bool header_parsed = false;
         bool keep_alive = true;
+        bool is_chunked = false;
+        size_t total_response_len = 0;
 
         while (true) {
             if (!header_parsed) {
@@ -125,6 +127,7 @@ void run_worker(const std::string host, const int port, const std::string path,
                     header_len = pos + 4;
                     header_parsed = true;
                     std::string_view headers(rx_buffer.data(), pos);
+                    
                     size_t cl_pos = headers.find("Content-Length: ");
                     if (cl_pos == std::string_view::npos) cl_pos = headers.find("content-length: ");
                     if (cl_pos != std::string_view::npos) {
@@ -137,6 +140,12 @@ void run_worker(const std::string host, const int port, const std::string path,
                             }
                         }
                     }
+
+                    if (headers.find("Transfer-Encoding: chunked") != std::string_view::npos ||
+                        headers.find("transfer-encoding: chunked") != std::string_view::npos) {
+                        is_chunked = true;
+                    }
+
                     if (headers.find("Connection: close") != std::string_view::npos ||
                         headers.find("connection: close") != std::string_view::npos) {
                         keep_alive = false;
@@ -144,9 +153,21 @@ void run_worker(const std::string host, const int port, const std::string path,
                 }
             }
 
-            if (header_parsed && rx_buffer.size() >= header_len + content_len) {
-                completed = true;
-                break;
+            if (header_parsed) {
+                if (!is_chunked) {
+                    if (rx_buffer.size() >= header_len + content_len) {
+                        total_response_len = header_len + content_len;
+                        completed = true;
+                        break;
+                    }
+                } else {
+                    size_t term = rx_buffer.find("0\r\n\r\n", header_len);
+                    if (term != std::string::npos) {
+                        total_response_len = term + 5;
+                        completed = true;
+                        break;
+                    }
+                }
             }
 
             int bytes = ::recv(sock, buf, sizeof(buf), 0);
@@ -161,10 +182,9 @@ void run_worker(const std::string host, const int port, const std::string path,
 
         if (completed && (rx_buffer.find("200 OK") != std::string::npos || rx_buffer.find("HTTP/1.1 200") != std::string::npos)) {
             result.success_count++;
-            const size_t total_req_size = header_len + content_len;
-            result.bytes_transferred += total_req_size;
+            result.bytes_transferred += total_response_len;
             result.latencies_ms.push_back(duration_ms);
-            rx_buffer.erase(0, total_req_size);
+            rx_buffer.erase(0, total_response_len);
 
             if (!keep_alive) {
                 close_sock(sock);
