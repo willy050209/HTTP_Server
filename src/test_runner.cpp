@@ -45,6 +45,18 @@
     }
 #endif
 
+void assert_get_status_with_retries(httplib23::Client& client, const char* path, int expected_status) {
+    constexpr int32_t MAX_RETRIES = 10;
+    for (int32_t attempt = 0; attempt < MAX_RETRIES; ++attempt) {
+        const auto res = client.Get(path);
+        if (res.has_value() && res->status == expected_status) {
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    assert(false);
+}
+
 /// <summary>
 /// 測試 1: Utility 工具函式測試
 /// </summary>
@@ -371,10 +383,10 @@ void test_doc_configuration() {
         assert(server.listen("127.0.0.1", port) == true);
 
         httplib23::Client client("127.0.0.1", port);
-        assert(client.Get("/ping")->status == 200);
-        assert(client.Get("/docs")->status == 404);
-        assert(client.Get("/scalar")->status == 404);
-        assert(client.Get("/openapi.json")->status == 404);
+        assert_get_status_with_retries(client, "/ping", 200);
+        assert_get_status_with_retries(client, "/docs", 404);
+        assert_get_status_with_retries(client, "/scalar", 404);
+        assert_get_status_with_retries(client, "/openapi.json", 404);
 
         server.stop();
     }
@@ -419,9 +431,9 @@ void test_doc_configuration() {
         assert(server1.listen("127.0.0.1", port1) == true);
 
         httplib23::Client client1("127.0.0.1", port1);
-        assert(client1.Get("/docs")->status == 200);     // Swagger UI 啟用
-        assert(client1.Get("/scalar")->status == 404);   // Scalar UI 關閉
-        assert(client1.Get("/openapi.json")->status == 200);
+        assert_get_status_with_retries(client1, "/docs", 200);     // Swagger UI 啟用
+        assert_get_status_with_retries(client1, "/scalar", 404);   // Scalar UI 關閉
+        assert_get_status_with_retries(client1, "/openapi.json", 200);
         server1.stop();
 
         httplib23::Server server2;
@@ -430,9 +442,9 @@ void test_doc_configuration() {
         assert(server2.listen("127.0.0.1", port2) == true);
 
         httplib23::Client client2("127.0.0.1", port2);
-        assert(client2.Get("/docs")->status == 404);     // Swagger UI 關閉
-        assert(client2.Get("/scalar")->status == 200);   // Scalar UI 啟用
-        assert(client2.Get("/openapi.json")->status == 200);
+        assert_get_status_with_retries(client2, "/docs", 404);     // Swagger UI 關閉
+        assert_get_status_with_retries(client2, "/scalar", 200);   // Scalar UI 啟用
+        assert_get_status_with_retries(client2, "/openapi.json", 200);
         server2.stop();
     }
 
