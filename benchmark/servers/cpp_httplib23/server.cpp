@@ -1,6 +1,5 @@
 #include "../../../include/httplib23.hpp"
 #include <string>
-#include <format>
 #include <iostream>
 
 int main(int argc, char* argv[]) {
@@ -31,8 +30,8 @@ int main(int argc, char* argv[]) {
     server.Get("/users/{id}", "User Profile benchmark")
         .handle([](const httplib23::Request& req, httplib23::Response& res) {
             const auto id_opt = req.get_path_param("id");
-            const std::string_view id = id_opt.value_or("0");
-            res.set_json(std::format(R"({{"id":{},"name":"User_{}","status":"active"}})", id, id));
+            const std::string id = id_opt.has_value() ? id_opt.value() : "0";
+            res.set_json(httplib23::compat::format("{{\"id\":{},\"name\":\"User_{}\",\"status\":\"active\"}}", id, id));
         });
 
     std::cout << "[httplib23] Benchmark server listening on http://127.0.0.1:" << port << std::endl;

@@ -21,15 +21,17 @@
     #include <winsock2.h>
     #include <ws2tcpip.h>
     #include <mswsock.h>
-    #include <crtdbg.h>
     #include <cstddef>
+#if defined(_MSC_VER)
+    #pragma warning(disable: 4324)
+#endif
 
     #pragma comment(lib, "ws2_32.lib")
 
     using socket_t = SOCKET;
     using ssize_t = std::ptrdiff_t;
-    inline constexpr socket_t invalid_socket = INVALID_SOCKET;
-    inline constexpr int socket_error_val = SOCKET_ERROR;
+    static constexpr socket_t invalid_socket = INVALID_SOCKET;
+    static constexpr int socket_error_val = SOCKET_ERROR;
 
     inline void close_socket(socket_t s) noexcept {
         if (s != invalid_socket) {
@@ -106,9 +108,40 @@
 #undef ERROR
 #endif
 
+// ============================================================================
+// Standard Version Detection & Backward Compatibility Layer (C++23/20/17/11)
+// ============================================================================
+
+#if defined(_MSVC_LANG)
+    #define HTTPLIB23_CPLUSPLUS _MSVC_LANG
+#else
+    #define HTTPLIB23_CPLUSPLUS __cplusplus
+#endif
+
+#if HTTPLIB23_CPLUSPLUS >= 202302L
+    #define HTTPLIB23_CPP23 1
+#endif
+#if HTTPLIB23_CPLUSPLUS >= 202002L
+    #define HTTPLIB23_CPP20 1
+#endif
+#if HTTPLIB23_CPLUSPLUS >= 201703L
+    #define HTTPLIB23_CPP17 1
+#endif
+#if HTTPLIB23_CPLUSPLUS >= 201402L
+    #define HTTPLIB23_CPP14 1
+#endif
+#if HTTPLIB23_CPLUSPLUS >= 201103L
+    #define HTTPLIB23_CPP11 1
+#endif
+
+#if defined(HTTPLIB23_CPP17)
+    #define HTTPLIB23_NODISCARD [[nodiscard]]
+#else
+    #define HTTPLIB23_NODISCARD
+#endif
+
 #include <iostream>
 #include <string>
-#include <string_view>
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
@@ -117,32 +150,430 @@
 #include <thread>
 #include <atomic>
 #include <mutex>
-#include <shared_mutex>
 #include <condition_variable>
 #include <memory>
 #include <sstream>
-#include <charconv>
-#include <expected>
-#include <optional>
-#include <span>
 #include <chrono>
 #include <algorithm>
 #include <queue>
-#include <concepts>
 #include <type_traits>
-#include <format>
-#if __has_include(<print>) && defined(__cpp_lib_print)
-    #include <print>
-    #define HTTPLIB23_HAS_PRINT 1
+#include <cstdint>
+#include <cstring>
+#include <cctype>
+#include <cstdio>
+#include <ctime>
+#include <stdexcept>
+
+#if defined(HTTPLIB23_CPP17)
+    #if __has_include(<string_view>)
+        #include <string_view>
+    #endif
+    #if __has_include(<optional>)
+        #include <optional>
+    #endif
+    #if __has_include(<charconv>)
+        #include <charconv>
+    #endif
+#endif
+
+#if defined(HTTPLIB23_CPP20)
+    #if __has_include(<format>)
+        #include <format>
+    #endif
+    #if __has_include(<source_location>)
+        #include <source_location>
+    #endif
+#endif
+
+#if defined(HTTPLIB23_CPP23)
+    #if __has_include(<expected>)
+        #include <expected>
+    #endif
+    #if __has_include(<print>)
+        #include <print>
+        #define HTTPLIB23_HAS_PRINT 1
+    #else
+        #define HTTPLIB23_HAS_PRINT 0
+    #endif
 #else
     #define HTTPLIB23_HAS_PRINT 0
 #endif
-#include <source_location>
-#include <cstdint>
-#include <cstring>
-#include <stdexcept>
 
 namespace httplib23 {
+namespace compat {
+
+// 1. string_view
+#if defined(HTTPLIB23_CPP17)
+using string_view = std::string_view;
+#else
+class string_view {
+private:
+    const char* m_data = "";
+    size_t m_size = 0;
+
+public:
+    static constexpr size_t npos = static_cast<size_t>(-1);
+
+    constexpr string_view() noexcept : m_data(""), m_size(0) {}
+    constexpr string_view(const char* s, size_t count) noexcept : m_data(s), m_size(count) {}
+    string_view(const char* s) noexcept : m_data(s ? s : ""), m_size(s ? std::strlen(s) : 0) {}
+    string_view(const std::string& s) noexcept : m_data(s.data()), m_size(s.size()) {}
+
+    constexpr const char* data() const noexcept { return m_data; }
+    constexpr size_t size() const noexcept { return m_size; }
+    constexpr size_t length() const noexcept { return m_size; }
+    constexpr bool empty() const noexcept { return m_size == 0; }
+    constexpr const char& operator[](size_t pos) const noexcept { return m_data[pos]; }
+    constexpr const char* begin() const noexcept { return m_data; }
+    constexpr const char* end() const noexcept { return m_data + m_size; }
+
+    string_view substr(size_t pos = 0, size_t count = npos) const noexcept {
+        if (pos > m_size) return string_view("", 0);
+        size_t rcount = (count == npos || pos + count > m_size) ? (m_size - pos) : count;
+        return string_view(m_data + pos, rcount);
+    }
+
+    size_t find(char c, size_t pos = 0) const noexcept {
+        if (pos >= m_size) return npos;
+        const char* p = static_cast<const char*>(std::memchr(m_data + pos, c, m_size - pos));
+        return p ? static_cast<size_t>(p - m_data) : npos;
+    }
+
+    size_t find(string_view s, size_t pos = 0) const noexcept {
+        if (s.empty()) return pos <= m_size ? pos : npos;
+        if (pos + s.size() > m_size) return npos;
+        for (size_t i = pos; i + s.size() <= m_size; ++i) {
+            if (std::memcmp(m_data + i, s.data(), s.size()) == 0) return i;
+        }
+        return npos;
+    }
+
+    size_t find(const char* s, size_t pos = 0) const noexcept {
+        return find(string_view(s), pos);
+    }
+
+    size_t find_first_not_of(const char* chars, size_t pos = 0) const noexcept {
+        if (pos >= m_size || !chars) return npos;
+        size_t chars_len = std::strlen(chars);
+        for (size_t i = pos; i < m_size; ++i) {
+            bool match = false;
+            for (size_t j = 0; j < chars_len; ++j) {
+                if (m_data[i] == chars[j]) { match = true; break; }
+            }
+            if (!match) return i;
+        }
+        return npos;
+    }
+
+    size_t find_last_not_of(const char* chars, size_t pos = npos) const noexcept {
+        if (m_size == 0 || !chars) return npos;
+        size_t chars_len = std::strlen(chars);
+        size_t start = (pos >= m_size) ? (m_size - 1) : pos;
+        for (size_t i = start + 1; i > 0; --i) {
+            size_t idx = i - 1;
+            bool match = false;
+            for (size_t j = 0; j < chars_len; ++j) {
+                if (m_data[idx] == chars[j]) { match = true; break; }
+            }
+            if (!match) return idx;
+        }
+        return npos;
+    }
+
+    size_t find_last_of(const char* chars, size_t pos = npos) const noexcept {
+        if (m_size == 0 || !chars) return npos;
+        size_t chars_len = std::strlen(chars);
+        size_t start = (pos >= m_size) ? (m_size - 1) : pos;
+        for (size_t i = start + 1; i > 0; --i) {
+            size_t idx = i - 1;
+            for (size_t j = 0; j < chars_len; ++j) {
+                if (m_data[idx] == chars[j]) return idx;
+            }
+        }
+        return npos;
+    }
+
+    bool starts_with(string_view s) const noexcept {
+        return m_size >= s.size() && std::memcmp(m_data, s.data(), s.size()) == 0;
+    }
+    bool starts_with(char c) const noexcept {
+        return !empty() && m_data[0] == c;
+    }
+    bool ends_with(string_view s) const noexcept {
+        return m_size >= s.size() && std::memcmp(m_data + m_size - s.size(), s.data(), s.size()) == 0;
+    }
+    bool ends_with(char c) const noexcept {
+        return !empty() && m_data[m_size - 1] == c;
+    }
+
+    bool operator==(string_view other) const noexcept {
+        return m_size == other.m_size && (m_size == 0 || std::memcmp(m_data, other.m_data, m_size) == 0);
+    }
+    bool operator==(const char* other) const noexcept {
+        return *this == string_view(other);
+    }
+    bool operator==(const std::string& other) const noexcept {
+        return *this == string_view(other);
+    }
+    bool operator!=(string_view other) const noexcept { return !(*this == other); }
+    bool operator!=(const char* other) const noexcept { return !(*this == other); }
+    bool operator!=(const std::string& other) const noexcept { return !(*this == other); }
+
+    explicit operator std::string() const {
+        return std::string(m_data, m_size);
+    }
+};
+
+inline std::ostream& operator<<(std::ostream& os, string_view sv) {
+    return os.write(sv.data(), static_cast<std::streamsize>(sv.size()));
+}
+#endif
+
+// 2. optional
+#if defined(HTTPLIB23_CPP17)
+template<typename T>
+using optional = std::optional<T>;
+inline constexpr auto nullopt = std::nullopt;
+using nullopt_t = std::nullopt_t;
+#else
+struct nullopt_t { explicit constexpr nullopt_t(int) {} };
+static constexpr nullopt_t nullopt{0};
+
+template<typename T>
+class optional {
+    bool m_has_value = false;
+    alignas(T) char m_storage[sizeof(T)];
+public:
+    optional() noexcept : m_has_value(false) {}
+    optional(nullopt_t) noexcept : m_has_value(false) {}
+    optional(const T& val) : m_has_value(true) { new (m_storage) T(val); }
+    optional(T&& val) : m_has_value(true) { new (m_storage) T(std::move(val)); }
+    optional(const optional& other) : m_has_value(other.m_has_value) {
+        if (m_has_value) new (m_storage) T(*other);
+    }
+    optional(optional&& other) noexcept : m_has_value(other.m_has_value) {
+        if (m_has_value) new (m_storage) T(std::move(*other));
+    }
+    ~optional() { reset(); }
+
+    optional& operator=(const optional& other) {
+        if (this != &other) {
+            reset();
+            if (other.m_has_value) {
+                new (m_storage) T(*other);
+                m_has_value = true;
+            }
+        }
+        return *this;
+    }
+    optional& operator=(optional&& other) noexcept {
+        if (this != &other) {
+            reset();
+            if (other.m_has_value) {
+                new (m_storage) T(std::move(*other));
+                m_has_value = true;
+            }
+        }
+        return *this;
+    }
+
+    void reset() noexcept {
+        if (m_has_value) {
+            reinterpret_cast<T*>(m_storage)->~T();
+            m_has_value = false;
+        }
+    }
+
+    bool has_value() const noexcept { return m_has_value; }
+    explicit operator bool() const noexcept { return m_has_value; }
+
+    T& value() {
+        if (!m_has_value) throw std::logic_error("bad optional access");
+        return *reinterpret_cast<T*>(m_storage);
+    }
+    const T& value() const {
+        if (!m_has_value) throw std::logic_error("bad optional access");
+        return *reinterpret_cast<const T*>(m_storage);
+    }
+
+    T& operator*() noexcept { return *reinterpret_cast<T*>(m_storage); }
+    const T& operator*() const noexcept { return *reinterpret_cast<const T*>(m_storage); }
+    T* operator->() noexcept { return reinterpret_cast<T*>(m_storage); }
+    const T* operator->() const noexcept { return reinterpret_cast<const T*>(m_storage); }
+};
+#endif
+
+// 3. expected & unexpected
+#if defined(HTTPLIB23_CPP23) && defined(__cpp_lib_expected)
+template<typename T, typename E = std::string>
+using expected = std::expected<T, E>;
+template<typename E>
+using unexpected = std::unexpected<E>;
+#else
+template<typename E>
+class unexpected {
+    E m_error;
+public:
+    explicit unexpected(const E& e) : m_error(e) {}
+    explicit unexpected(E&& e) : m_error(std::move(e)) {}
+    const E& error() const noexcept { return m_error; }
+    E& error() noexcept { return m_error; }
+};
+
+template<typename T, typename E = std::string>
+class expected {
+    bool m_has_value;
+    union {
+        T m_val;
+        E m_err;
+    };
+public:
+    expected(const T& val) : m_has_value(true), m_val(val) {}
+    expected(T&& val) : m_has_value(true), m_val(std::move(val)) {}
+    expected(const unexpected<E>& unex) : m_has_value(false), m_err(unex.error()) {}
+    expected(unexpected<E>&& unex) : m_has_value(false), m_err(std::move(unex.error())) {}
+
+    expected(const expected& other) : m_has_value(other.m_has_value) {
+        if (m_has_value) new (&m_val) T(other.m_val);
+        else new (&m_err) E(other.m_err);
+    }
+    expected(expected&& other) noexcept : m_has_value(other.m_has_value) {
+        if (m_has_value) new (&m_val) T(std::move(other.m_val));
+        else new (&m_err) E(std::move(other.m_err));
+    }
+    ~expected() {
+        if (m_has_value) m_val.~T();
+        else m_err.~E();
+    }
+
+    bool has_value() const noexcept { return m_has_value; }
+    explicit operator bool() const noexcept { return m_has_value; }
+
+    T& value() {
+        if (!m_has_value) throw std::logic_error("bad expected access");
+        return m_val;
+    }
+    const T& value() const {
+        if (!m_has_value) throw std::logic_error("bad expected access");
+        return m_val;
+    }
+
+    T& operator*() noexcept { return m_val; }
+    const T& operator*() const noexcept { return m_val; }
+    T* operator->() noexcept { return &m_val; }
+    const T* operator->() const noexcept { return &m_val; }
+
+    const E& error() const noexcept { return m_err; }
+    E& error() noexcept { return m_err; }
+};
+#endif
+
+// 4. source_location
+#if defined(HTTPLIB23_CPP20) && defined(__cpp_lib_source_location)
+using source_location = std::source_location;
+#else
+struct source_location {
+    const char* m_file = "unknown";
+    const char* m_func = "unknown";
+    uint32_t m_line = 0;
+
+    constexpr source_location() noexcept = default;
+    constexpr source_location(const char* file, const char* func, uint32_t line) noexcept
+        : m_file(file), m_func(func), m_line(line) {}
+
+#if defined(_MSC_VER) && (_MSC_VER >= 1926)
+    static constexpr source_location current(const char* file = __builtin_FILE(), const char* func = __builtin_FUNCTION(), uint32_t line = __builtin_LINE()) noexcept {
+        return source_location(file, func, line);
+    }
+#elif defined(__has_builtin)
+    #if __has_builtin(__builtin_FILE) && __has_builtin(__builtin_LINE)
+        static constexpr source_location current(const char* file = __builtin_FILE(), const char* func = __builtin_FUNCTION(), uint32_t line = __builtin_LINE()) noexcept {
+            return source_location(file, func, line);
+        }
+    #else
+        static constexpr source_location current(const char* file = __FILE__, const char* func = "", uint32_t line = __LINE__) noexcept {
+            return source_location(file, func, line);
+        }
+    #endif
+#else
+    static constexpr source_location current(const char* file = __FILE__, const char* func = "", uint32_t line = __LINE__) noexcept {
+        return source_location(file, func, line);
+    }
+#endif
+
+    constexpr const char* file_name() const noexcept { return m_file; }
+    constexpr const char* function_name() const noexcept { return m_func; }
+    constexpr uint32_t line() const noexcept { return m_line; }
+};
+#endif
+
+// 5. from_chars
+struct from_chars_result {
+    const char* ptr = nullptr;
+    std::errc ec = std::errc{};
+};
+
+template<typename T>
+inline from_chars_result from_chars(const char* first, const char* last, T& value, int base = 10) noexcept {
+#if defined(HTTPLIB23_CPP17) && __has_include(<charconv>)
+    auto res = std::from_chars(first, last, value, base);
+    return { res.ptr, res.ec };
+#else
+    if (!first || first >= last) return { first, std::errc::invalid_argument };
+    T result = 0;
+    const char* p = first;
+    while (p < last) {
+        char c = *p;
+        int digit = -1;
+        if (c >= '0' && c <= '9') digit = c - '0';
+        else if (c >= 'a' && c <= 'z') digit = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'Z') digit = c - 'A' + 10;
+        if (digit < 0 || digit >= base) break;
+        result = static_cast<T>(result * base + digit);
+        ++p;
+    }
+    if (p == first) return { first, std::errc::invalid_argument };
+    value = result;
+    return { p, std::errc{} };
+#endif
+}
+
+// 6. format
+namespace detail_fmt {
+    inline std::string format_step(string_view fmt) {
+        return std::string(fmt.data(), fmt.size());
+    }
+
+    template<typename T, typename... Args>
+    inline std::string format_step(string_view fmt, const T& val, const Args&... args) {
+        size_t pos = fmt.find("{}");
+        if (pos == string_view::npos) {
+            return std::string(fmt.data(), fmt.size());
+        }
+        std::ostringstream ss;
+        ss << std::string(fmt.substr(0, pos)) << val;
+        string_view remaining = fmt.substr(pos + 2);
+        return ss.str() + format_step(remaining, args...);
+    }
+}
+
+template<typename... Args>
+inline std::string format(string_view fmt, const Args&... args) {
+    return detail_fmt::format_step(fmt, args...);
+}
+
+} // namespace compat
+
+using string_view = compat::string_view;
+template<typename T, typename E = std::string>
+using expected = compat::expected<T, E>;
+template<typename E>
+using unexpected = compat::unexpected<E>;
+template<typename T>
+using optional = compat::optional<T>;
+using nullopt_t = compat::nullopt_t;
+using compat::nullopt;
+using source_location = compat::source_location;
 
 // ============================================================================
 // NetworkContext (RAII Network Lifecycle Manager)
@@ -205,7 +636,7 @@ enum class StatusCode : int32_t {
 /// <summary>
 /// 根據 HTTP 狀態碼獲得標準文字描述。
 /// </summary>
-[[nodiscard]] inline constexpr std::string_view get_status_message(const int32_t code) noexcept {
+HTTPLIB23_NODISCARD inline constexpr string_view get_status_message(const int32_t code) noexcept {
     switch (code) {
         case 200: return "OK";
         case 201: return "Created";
@@ -230,7 +661,7 @@ enum class StatusCode : int32_t {
     }
 }
 
-[[nodiscard]] inline constexpr std::string_view get_status_message(const StatusCode status) noexcept {
+HTTPLIB23_NODISCARD inline constexpr string_view get_status_message(const StatusCode status) noexcept {
     return get_status_message(static_cast<int32_t>(status));
 }
 
@@ -248,7 +679,7 @@ enum class Method : uint8_t {
     UNKNOWN
 };
 
-[[nodiscard]] inline constexpr std::string_view method_to_string(const Method method) noexcept {
+HTTPLIB23_NODISCARD inline constexpr string_view method_to_string(const Method method) noexcept {
     switch (method) {
         case Method::GET:     return "GET";
         case Method::POST:    return "POST";
@@ -257,18 +688,18 @@ enum class Method : uint8_t {
         case Method::PATCH:   return "PATCH";
         case Method::OPTIONS: return "OPTIONS";
         case Method::HEAD:    return "HEAD";
-        default:              return "UNKNOWN";
+        default:              return "GET";
     }
 }
 
-[[nodiscard]] inline constexpr Method string_to_method(const std::string_view str) noexcept {
-    if (str == "GET")       return Method::GET;
-    if (str == "POST")      return Method::POST;
-    if (str == "PUT")       return Method::PUT;
-    if (str == "DELETE")    return Method::DELETE;
-    if (str == "PATCH")     return Method::PATCH;
-    if (str == "OPTIONS")   return Method::OPTIONS;
-    if (str == "HEAD")      return Method::HEAD;
+HTTPLIB23_NODISCARD inline Method string_to_method(const string_view method_str) noexcept {
+    if (method_str == "GET") return Method::GET;
+    if (method_str == "POST") return Method::POST;
+    if (method_str == "PUT") return Method::PUT;
+    if (method_str == "DELETE") return Method::DELETE;
+    if (method_str == "PATCH") return Method::PATCH;
+    if (method_str == "OPTIONS") return Method::OPTIONS;
+    if (method_str == "HEAD") return Method::HEAD;
     return Method::UNKNOWN;
 }
 
@@ -276,10 +707,14 @@ enum class Method : uint8_t {
 /// 不分大小寫的 HTTP Header 比較器。
 /// </summary>
 struct CaseInsensitiveCompare {
-    [[nodiscard]] bool operator()(const std::string_view a, const std::string_view b) const noexcept {
-        return std::ranges::equal(a, b, [](const char c1, const char c2) noexcept {
-            return std::tolower(static_cast<uint8_t>(c1)) == std::tolower(static_cast<uint8_t>(c2));
-        });
+    HTTPLIB23_NODISCARD bool operator()(const string_view a, const string_view b) const noexcept {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (std::tolower(static_cast<uint8_t>(a[i])) != std::tolower(static_cast<uint8_t>(b[i]))) {
+                return false;
+            }
+        }
+        return true;
     }
 };
 
@@ -287,10 +722,10 @@ struct CaseInsensitiveCompare {
 /// 不分大小寫的 HTTP Header Hash 計算器。
 /// </summary>
 struct CaseInsensitiveHash {
-    [[nodiscard]] size_t operator()(const std::string_view str) const noexcept {
+    HTTPLIB23_NODISCARD size_t operator()(const string_view str) const noexcept {
         size_t h = 0;
-        for (const char c : str) {
-            h = h * 31 + static_cast<size_t>(std::tolower(static_cast<uint8_t>(c)));
+        for (size_t i = 0; i < str.size(); ++i) {
+            h = h * 31 + static_cast<size_t>(std::tolower(static_cast<uint8_t>(str[i])));
         }
         return h;
     }
@@ -304,22 +739,36 @@ using HeaderMap = std::unordered_map<std::string, std::string, CaseInsensitiveHa
 
 namespace detail {
 
-[[nodiscard]] inline constexpr bool contains_crlf(const std::string_view str) noexcept {
-    return str.find('\r') != std::string_view::npos || str.find('\n') != std::string_view::npos;
+HTTPLIB23_NODISCARD inline bool starts_with(const string_view s, const string_view prefix) noexcept {
+    return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
+}
+HTTPLIB23_NODISCARD inline bool starts_with(const string_view s, char c) noexcept {
+    return !s.empty() && s[0] == c;
+}
+HTTPLIB23_NODISCARD inline bool ends_with(const string_view s, const string_view suffix) noexcept {
+    return s.size() >= suffix.size() && s.substr(s.size() - suffix.size()) == suffix;
+}
+HTTPLIB23_NODISCARD inline bool ends_with(const string_view s, char c) noexcept {
+    return !s.empty() && s[s.size() - 1] == c;
 }
 
-[[nodiscard]] inline constexpr std::string_view trim(const std::string_view str) noexcept {
+HTTPLIB23_NODISCARD inline bool contains_crlf(const string_view str) noexcept {
+    return str.find('\r') != string_view::npos || str.find('\n') != string_view::npos;
+}
+
+HTTPLIB23_NODISCARD inline string_view trim(const string_view str) noexcept {
     const size_t first = str.find_first_not_of(" \t\r\n");
-    if (first == std::string_view::npos) return "";
+    if (first == string_view::npos) return "";
     const size_t last = str.find_last_not_of(" \t\r\n");
     return str.substr(first, (last - first + 1));
 }
 
-[[nodiscard]] inline std::string url_encode(const std::string_view str) {
+HTTPLIB23_NODISCARD inline std::string url_encode(const string_view str) {
     std::ostringstream escaped;
     escaped.fill('0');
     escaped << std::hex;
-    for (const char c : str) {
+    for (size_t i = 0; i < str.size(); ++i) {
+        char c = str[i];
         const auto uc = static_cast<uint8_t>(c);
         if (std::isalnum(uc) || c == '-' || c == '_' || c == '.' || c == '~') {
             escaped << c;
@@ -330,16 +779,16 @@ namespace detail {
     return escaped.str();
 }
 
-[[nodiscard]] inline std::string url_decode(const std::string_view str) {
+HTTPLIB23_NODISCARD inline std::string url_decode(const string_view str) {
     std::string result;
     result.reserve(str.size());
     for (size_t i = 0; i < str.size(); ++i) {
         if (str[i] == '%') {
             if (i + 2 < str.size()) {
-                const std::string_view hex_sv = str.substr(i + 1, 2);
+                const string_view hex_sv = str.substr(i + 1, 2);
                 int32_t value = 0;
-                const auto [ptr, ec] = std::from_chars(hex_sv.data(), hex_sv.data() + 2, value, 16);
-                if (ec == std::errc{}) {
+                const auto res = compat::from_chars(hex_sv.data(), hex_sv.data() + 2, value, 16);
+                if (res.ec == std::errc{}) {
                     result += static_cast<char>(value);
                     i += 2;
                 } else {
@@ -357,14 +806,14 @@ namespace detail {
     return result;
 }
 
-[[nodiscard]] inline std::map<std::string, std::string> parse_query_string(const std::string_view query_str) {
+HTTPLIB23_NODISCARD inline std::map<std::string, std::string> parse_query_string(const string_view query_str) {
     std::map<std::string, std::string> params;
     size_t start = 0;
     while (start < query_str.size()) {
         const size_t end = query_str.find('&', start);
-        const std::string_view pair = query_str.substr(start, (end == std::string_view::npos ? query_str.size() : end) - start);
+        const string_view pair = query_str.substr(start, (end == string_view::npos ? query_str.size() : end) - start);
         const size_t eq = pair.find('=');
-        if (eq != std::string_view::npos) {
+        if (eq != string_view::npos) {
             std::string key = url_decode(pair.substr(0, eq));
             std::string val = url_decode(pair.substr(eq + 1));
             params[std::move(key)] = std::move(val);
@@ -372,16 +821,23 @@ namespace detail {
             std::string key = url_decode(pair);
             params[std::move(key)] = "";
         }
-        if (end == std::string_view::npos) break;
+        if (end == string_view::npos) break;
         start = end + 1;
     }
     return params;
 }
 
-[[nodiscard]] inline std::string escape_json(const std::string_view str) {
+HTTPLIB23_NODISCARD inline std::string format_hex_u4(uint8_t c) {
+    char buf[8];
+    std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+    return std::string(buf);
+}
+
+HTTPLIB23_NODISCARD inline std::string escape_json(const string_view str) {
     std::string out;
     out.reserve(str.size() + 16);
-    for (const char c : str) {
+    for (size_t i = 0; i < str.size(); ++i) {
+        char c = str[i];
         switch (c) {
             case '"':  out += "\\\""; break;
             case '\\': out += "\\\\"; break;
@@ -392,7 +848,7 @@ namespace detail {
             case '\t': out += "\\t"; break;
             default:
                 if (static_cast<uint8_t>(c) < 0x20) {
-                    out += std::format("\\u{:04x}", static_cast<uint8_t>(c));
+                    out += format_hex_u4(static_cast<uint8_t>(c));
                 } else {
                     out += c;
                 }
@@ -416,7 +872,7 @@ enum class LogLevel : uint8_t {
     OFF   = 4
 };
 
-[[nodiscard]] inline constexpr std::string_view level_to_string(const LogLevel level) noexcept {
+HTTPLIB23_NODISCARD inline constexpr string_view level_to_string(const LogLevel level) noexcept {
     switch (level) {
         case LogLevel::DEBUG: return "DEBUG";
         case LogLevel::INFO:  return "INFO";
@@ -429,7 +885,7 @@ enum class LogLevel : uint8_t {
 
 class Logger {
 public:
-    using LogCallback = std::function<void(LogLevel level, std::string_view msg)>;
+    using LogCallback = std::function<void(LogLevel level, string_view msg)>;
 
 private:
     std::atomic<LogLevel> m_level{LogLevel::INFO};
@@ -440,15 +896,24 @@ private:
     std::thread m_bg_thread;
     std::atomic<bool> m_running{true};
 
-    [[nodiscard]] static std::string_view extract_filename(const std::string_view path) noexcept {
+    HTTPLIB23_NODISCARD static string_view extract_filename(const string_view path) noexcept {
         const size_t pos = path.find_last_of("/\\");
-        if (pos != std::string_view::npos) return path.substr(pos + 1);
+        if (pos != string_view::npos) return path.substr(pos + 1);
         return path;
     }
 
-    [[nodiscard]] static std::string get_current_timestamp() noexcept {
-        const auto now = std::chrono::system_clock::now();
-        return std::format("{:%Y-%m-%d %H:%M:%S}", now);
+    HTTPLIB23_NODISCARD static std::string get_current_timestamp() noexcept {
+        auto now = std::chrono::system_clock::now();
+        std::time_t tt = std::chrono::system_clock::to_time_t(now);
+        std::tm tm_buf{};
+#if defined(_WIN32) || defined(_WIN64)
+        localtime_s(&tm_buf, &tt);
+#else
+        localtime_r(&tt, &tm_buf);
+#endif
+        char buf[64];
+        std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm_buf);
+        return std::string(buf);
     }
 
 public:
@@ -461,11 +926,11 @@ public:
         m_level.store(level, std::memory_order_relaxed);
     }
 
-    [[nodiscard]] LogLevel get_level() const noexcept {
+    HTTPLIB23_NODISCARD LogLevel get_level() const noexcept {
         return m_level.load(std::memory_order_relaxed);
     }
 
-    [[nodiscard]] bool is_enabled(const LogLevel level) const noexcept {
+    HTTPLIB23_NODISCARD bool is_enabled(const LogLevel level) const noexcept {
         return level >= m_level.load(std::memory_order_relaxed);
     }
 
@@ -475,12 +940,12 @@ public:
     }
 
     void log(const LogLevel level,
-             const std::source_location& loc,
-             const std::string_view msg) {
+             const source_location& loc,
+             const string_view msg) {
         if (!is_enabled(level)) return;
 
         std::string timestamp = get_current_timestamp();
-        std::string final_log = std::format("[{}] [{}] [{}:{}] {}\n",
+        std::string final_log = compat::format("[{}] [{}] [{}:{}] {}\n",
             timestamp,
             level_to_string(level),
             extract_filename(loc.file_name()),
@@ -540,6 +1005,7 @@ private:
     }
 };
 
+#if defined(HTTPLIB23_CPP20) && defined(__cpp_lib_format) && defined(__cpp_lib_source_location)
 template <typename... Args>
 struct log_location_fmt {
     std::format_string<Args...> fmt;
@@ -586,6 +1052,47 @@ inline void log_error(
     std::string formatted_msg = std::format(fmt_loc.fmt, std::forward<Args>(args)...);
     Logger::instance().log(LogLevel::ERROR, fmt_loc.loc, formatted_msg);
 }
+#else
+struct log_location_fmt {
+    string_view fmt;
+    source_location loc;
+
+    log_location_fmt(const char* s, source_location l = source_location::current())
+        : fmt(s), loc(l) {}
+    log_location_fmt(const std::string& s, source_location l = source_location::current())
+        : fmt(s), loc(l) {}
+    log_location_fmt(string_view s, source_location l = source_location::current())
+        : fmt(s), loc(l) {}
+};
+
+template <typename... Args>
+inline void log_debug(log_location_fmt fmt_loc, Args&&... args) {
+    if (!Logger::instance().is_enabled(LogLevel::DEBUG)) return;
+    std::string formatted_msg = compat::format(fmt_loc.fmt, std::forward<Args>(args)...);
+    Logger::instance().log(LogLevel::DEBUG, fmt_loc.loc, formatted_msg);
+}
+
+template <typename... Args>
+inline void log_info(log_location_fmt fmt_loc, Args&&... args) {
+    if (!Logger::instance().is_enabled(LogLevel::INFO)) return;
+    std::string formatted_msg = compat::format(fmt_loc.fmt, std::forward<Args>(args)...);
+    Logger::instance().log(LogLevel::INFO, fmt_loc.loc, formatted_msg);
+}
+
+template <typename... Args>
+inline void log_warn(log_location_fmt fmt_loc, Args&&... args) {
+    if (!Logger::instance().is_enabled(LogLevel::WARN)) return;
+    std::string formatted_msg = compat::format(fmt_loc.fmt, std::forward<Args>(args)...);
+    Logger::instance().log(LogLevel::WARN, fmt_loc.loc, formatted_msg);
+}
+
+template <typename... Args>
+inline void log_error(log_location_fmt fmt_loc, Args&&... args) {
+    if (!Logger::instance().is_enabled(LogLevel::ERROR)) return;
+    std::string formatted_msg = compat::format(fmt_loc.fmt, std::forward<Args>(args)...);
+    Logger::instance().log(LogLevel::ERROR, fmt_loc.loc, formatted_msg);
+}
+#endif
 
 // ============================================================================
 // 3. Request & Response Objects
@@ -600,22 +1107,22 @@ struct Request {
     std::map<std::string, std::string> query_params;
     std::unordered_map<std::string, std::string> path_params;
 
-    [[nodiscard]] std::optional<std::string> get_header(const std::string_view key) const noexcept {
+    HTTPLIB23_NODISCARD optional<std::string> get_header(const string_view key) const noexcept {
         const auto it = headers.find(std::string(key));
         if (it != headers.end()) return it->second;
-        return std::nullopt;
+        return nullopt;
     }
 
-    [[nodiscard]] std::optional<std::string> get_param(const std::string_view key) const noexcept {
+    HTTPLIB23_NODISCARD optional<std::string> get_param(const string_view key) const noexcept {
         const auto it = query_params.find(std::string(key));
         if (it != query_params.end()) return it->second;
-        return std::nullopt;
+        return nullopt;
     }
 
-    [[nodiscard]] std::optional<std::string> get_path_param(const std::string_view key) const noexcept {
+    HTTPLIB23_NODISCARD optional<std::string> get_path_param(const string_view key) const noexcept {
         const auto it = path_params.find(std::string(key));
         if (it != path_params.end()) return it->second;
-        return std::nullopt;
+        return nullopt;
     }
 };
 
@@ -624,7 +1131,7 @@ struct Response {
     HeaderMap headers;
     std::string body;
 
-    void set_content(const std::string_view content, const std::string_view content_type = "text/plain") {
+    void set_content(const string_view content, const string_view content_type = "text/plain") {
         if (detail::contains_crlf(content_type)) {
             throw std::invalid_argument("CRLF injection detected in Content-Type");
         }
@@ -643,7 +1150,7 @@ struct Response {
         headers[std::move(key)] = std::move(value);
     }
 
-    void set_redirect(const std::string_view location, const int32_t redirect_status = 302) {
+    void set_redirect(const string_view location, const int32_t redirect_status = 302) {
         if (detail::contains_crlf(location)) {
             throw std::invalid_argument("CRLF injection detected in Redirect Location");
         }
@@ -653,27 +1160,29 @@ struct Response {
 
     bool keep_alive = true;
 
-    [[nodiscard]] std::string serialize_headers() const {
+    HTTPLIB23_NODISCARD std::string serialize_headers() const {
         std::string res;
         res.reserve(256 + headers.size() * 64);
-        res += std::format("HTTP/1.1 {} {}\r\n", status, get_status_message(status));
+        res += "HTTP/1.1 " + std::to_string(status) + " " + std::string(get_status_message(status)) + "\r\n";
 
         bool has_content_length = false;
         bool has_server = false;
         bool has_connection = false;
 
-        for (const auto& [k, v] : headers) {
+        for (const auto& kv : headers) {
+            const auto& k = kv.first;
+            const auto& v = kv.second;
             if (CaseInsensitiveCompare{}(k, "Content-Length")) has_content_length = true;
             if (CaseInsensitiveCompare{}(k, "Server")) has_server = true;
             if (CaseInsensitiveCompare{}(k, "Connection")) has_connection = true;
-            res += std::format("{}: {}\r\n", k, v);
+            res += k + ": " + v + "\r\n";
         }
 
         if (!has_content_length) {
-            res += std::format("Content-Length: {}\r\n", body.size());
+            res += "Content-Length: " + std::to_string(body.size()) + "\r\n";
         }
         if (!has_server) {
-            res += "Server: httplib23/1.0 (C++23 Modern Engine)\r\n";
+            res += "Server: httplib23/1.0 (High Performance Engine)\r\n";
         }
         if (!has_connection) {
             if (keep_alive) {
@@ -746,22 +1255,22 @@ public:
     }
 
     FluentRoute& param(std::string name, std::string description = "", bool required = true, std::string in_type = "query", std::string data_type = "string") {
-        m_meta.parameters.push_back(ParameterMeta{
-            .name = std::move(name),
-            .description = std::move(description),
-            .required = required,
-            .in_type = std::move(in_type),
-            .data_type = std::move(data_type)
-        });
+        ParameterMeta p;
+        p.name = std::move(name);
+        p.description = std::move(description);
+        p.required = required;
+        p.in_type = std::move(in_type);
+        p.data_type = std::move(data_type);
+        m_meta.parameters.push_back(std::move(p));
         return *this;
     }
 
     FluentRoute& response(int32_t status_code, std::string description, std::string content_type = "application/json") {
-        m_meta.responses.push_back(ResponseMeta{
-            .status_code = status_code,
-            .description = std::move(description),
-            .content_type = std::move(content_type)
-        });
+        ResponseMeta r;
+        r.status_code = status_code;
+        r.description = std::move(description);
+        r.content_type = std::move(content_type);
+        m_meta.responses.push_back(std::move(r));
         return *this;
     }
 
@@ -772,17 +1281,10 @@ public:
 
 class OpenApiGenerator {
 public:
-    [[nodiscard]] static std::string generate_spec(const std::vector<RouteEntry>& routes, const std::string_view title = "httplib23 API", const std::string_view version = "1.0.0") {
+    HTTPLIB23_NODISCARD static std::string generate_spec(const std::vector<RouteEntry>& routes, const string_view title = "httplib23 API", const string_view version = "1.0.0") {
         std::string json;
         json.reserve(4096);
-        json += std::format(R"({{
-  "openapi": "3.0.3",
-  "info": {{
-    "title": "{}",
-    "version": "{}"
-  }},
-  "paths": {{
-)", detail::escape_json(title), detail::escape_json(version));
+        json += compat::format("{{\n  \"openapi\": \"3.0.3\",\n  \"info\": {{\n    \"title\": \"{}\",\n    \"version\": \"{}\"\n  }},\n  \"paths\": {{\n", detail::escape_json(title), detail::escape_json(version));
 
         std::map<std::string, std::vector<const RouteEntry*>> path_map;
         for (const auto& entry : routes) {
@@ -790,7 +1292,9 @@ public:
         }
 
         bool first_path = true;
-        for (const auto& [path, entry_list] : path_map) {
+        for (const auto& kv : path_map) {
+            const auto& path = kv.first;
+            const auto& entry_list = kv.second;
             if (!first_path) json += ",\n";
             first_path = false;
 
@@ -800,32 +1304,32 @@ public:
                 size_t end = openapi_path.find('/', pos);
                 if (end == std::string::npos) end = openapi_path.size();
                 std::string param_name = openapi_path.substr(pos + 1, end - pos - 1);
-                openapi_path.replace(pos, end - pos, std::format("{{{}}}", param_name));
+                openapi_path.replace(pos, end - pos, "{" + param_name + "}");
                 pos += param_name.size() + 2;
             }
 
-            json += std::format("    \"{}\": {{\n", detail::escape_json(openapi_path));
+            json += compat::format("    \"{}\": {{\n", detail::escape_json(openapi_path));
             bool first_method = true;
             for (const auto* entry_ptr : entry_list) {
                 const auto& meta = entry_ptr->meta;
                 if (!first_method) json += ",\n";
                 first_method = false;
 
-                const std::string method_lower = [] (std::string_view s) {
+                const std::string method_lower = [] (string_view s) {
                     std::string res;
-                    for (char c : s) res += static_cast<char>(std::tolower(static_cast<uint8_t>(c)));
+                    for (size_t i = 0; i < s.size(); ++i) res += static_cast<char>(std::tolower(static_cast<uint8_t>(s[i])));
                     return res;
                 }(method_to_string(meta.method));
 
-                json += std::format("      \"{}\": {{\n", method_lower);
-                json += std::format("        \"summary\": \"{}\",\n", detail::escape_json(meta.summary));
-                json += std::format("        \"description\": \"{}\"", detail::escape_json(meta.description));
+                json += compat::format("      \"{}\": {{\n", method_lower);
+                json += compat::format("        \"summary\": \"{}\",\n", detail::escape_json(meta.summary));
+                json += compat::format("        \"description\": \"{}\"", detail::escape_json(meta.description));
 
                 if (!meta.tags.empty()) {
                     json += ",\n        \"tags\": [";
                     for (size_t i = 0; i < meta.tags.size(); ++i) {
                         if (i > 0) json += ", ";
-                        json += std::format("\"{}\"", detail::escape_json(meta.tags[i]));
+                        json += compat::format("\"{}\"", detail::escape_json(meta.tags[i]));
                     }
                     json += "]";
                 }
@@ -835,13 +1339,7 @@ public:
                     for (size_t i = 0; i < meta.parameters.size(); ++i) {
                         const auto& p = meta.parameters[i];
                         if (i > 0) json += ",\n";
-                        json += std::format(R"(          {{
-            "name": "{}",
-            "in": "{}",
-            "required": {},
-            "description": "{}",
-            "schema": {{ "type": "{}" }}
-          }})", detail::escape_json(p.name), detail::escape_json(p.in_type), (p.required ? "true" : "false"), detail::escape_json(p.description), detail::escape_json(p.data_type));
+                        json += compat::format("          {{\n            \"name\": \"{}\",\n            \"in\": \"{}\",\n            \"required\": {},\n            \"description\": \"{}\",\n            \"schema\": {{ \"type\": \"{}\" }}\n          }}", detail::escape_json(p.name), detail::escape_json(p.in_type), (p.required ? "true" : "false"), detail::escape_json(p.description), detail::escape_json(p.data_type));
                     }
                     json += "\n        ]";
                 }
@@ -853,7 +1351,7 @@ public:
                     for (size_t i = 0; i < meta.responses.size(); ++i) {
                         const auto& r = meta.responses[i];
                         if (i > 0) json += ",\n";
-                        json += std::format("          \"{}\": {{ \"description\": \"{}\" }}", r.status_code, detail::escape_json(r.description));
+                        json += compat::format("          \"{}\": {{ \"description\": \"{}\" }}", r.status_code, detail::escape_json(r.description));
                     }
                     json += "\n";
                 }
@@ -869,60 +1367,25 @@ public:
 
 class SwaggerDocGenerator {
 public:
-    [[nodiscard]] static std::string generate_html(const std::string_view openapi_url, const std::string_view title = "Swagger UI") {
-        return std::format(R"(<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>{}</title>
-  <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
-  <style>
-    html {{ box-sizing: border-box; overflow-y: scroll; }}
-    *, *:before, *:after {{ box-sizing: inherit; }}
-    body {{ margin:0; background: #fafafa; }}
-  </style>
-</head>
-<body>
-  <div id="swagger-ui"></div>
-  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" charset="UTF-8"></script>
-  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-standalone-preset.js" charset="UTF-8"></script>
-  <script>
-    window.onload = function() {{
-      window.ui = SwaggerUIBundle({{
-        url: "{}",
-        dom_id: '#swagger-ui',
-        deepLinking: true,
-        presets: [
-          SwaggerUIBundle.presets.apis,
-          SwaggerUIStandalonePreset
-        ],
-        plugins: [
-          SwaggerUIBundle.plugins.DownloadUrl
-        ],
-        layout: "StandaloneLayout"
-      }});
-    }};
-  </script>
-</body>
-</html>)", title, openapi_url);
+    HTTPLIB23_NODISCARD static std::string generate_html(const string_view openapi_url, const string_view title = "Swagger UI") {
+        std::string html = "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"UTF-8\">\n  <title>";
+        html += std::string(title);
+        html += "</title>\n  <link rel=\"stylesheet\" type=\"text/css\" href=\"https://unpkg.com/swagger-ui-dist@5/swagger-ui.css\" />\n  <style>\n    html { box-sizing: border-box; overflow-y: scroll; }\n    *, *:before, *:after { box-sizing: inherit; }\n    body { margin:0; background: #fafafa; }\n  </style>\n</head>\n<body>\n  <div id=\"swagger-ui\"></div>\n  <script src=\"https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js\" charset=\"UTF-8\"></script>\n  <script src=\"https://unpkg.com/swagger-ui-dist@5/swagger-ui-standalone-preset.js\" charset=\"UTF-8\"></script>\n  <script>\n    window.onload = function() {\n      window.ui = SwaggerUIBundle({\n        url: \"";
+        html += std::string(openapi_url);
+        html += "\",\n        dom_id: '#swagger-ui',\n        deepLinking: true,\n        presets: [\n          SwaggerUIBundle.presets.apis,\n          SwaggerUIStandalonePreset\n        ],\n        plugins: [\n          SwaggerUIBundle.plugins.DownloadUrl\n        ],\n        layout: \"StandaloneLayout\"\n      });\n    };\n  </script>\n</body>\n</html>";
+        return html;
     }
 };
 
 class ScalarDocGenerator {
 public:
-    [[nodiscard]] static std::string generate_html(const std::string_view openapi_url, const std::string_view title = "Scalar API Reference") {
-        return std::format(R"(<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{}</title>
-</head>
-<body>
-  <script id="api-reference" data-url="{}"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
-</body>
-</html>)", title, openapi_url);
+    HTTPLIB23_NODISCARD static std::string generate_html(const string_view openapi_url, const string_view title = "Scalar API Reference") {
+        std::string html = "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>";
+        html += std::string(title);
+        html += "</title>\n</head>\n<body>\n  <script id=\"api-reference\" data-url=\"";
+        html += std::string(openapi_url);
+        html += "\"></script>\n  <script src=\"https://cdn.jsdelivr.net/npm/@scalar/api-reference\"></script>\n</body>\n</html>";
+        return html;
     }
 };
 
@@ -948,20 +1411,20 @@ private:
     RouteNode m_root;
     std::vector<RouteEntry> m_routes_flat;
 
-    [[nodiscard]] static std::vector<Segment> parse_path(const std::string_view path) {
+    HTTPLIB23_NODISCARD static std::vector<Segment> parse_path(const string_view path) {
         std::vector<Segment> segments;
         size_t start = 0;
         while (start < path.size()) {
             while (start < path.size() && path[start] == '/') ++start;
             if (start >= path.size()) break;
             const size_t end = path.find('/', start);
-            const std::string_view seg_sv = path.substr(start, (end == std::string_view::npos ? path.size() : end) - start);
+            const string_view seg_sv = path.substr(start, (end == string_view::npos ? path.size() : end) - start);
             
             Segment seg;
-            if (seg_sv.starts_with('{') && seg_sv.ends_with('}')) {
+            if (detail::starts_with(seg_sv, '{') && detail::ends_with(seg_sv, '}')) {
                 seg.is_param = true;
                 seg.name = std::string(seg_sv.substr(1, seg_sv.size() - 2));
-            } else if (seg_sv.starts_with(':')) {
+            } else if (detail::starts_with(seg_sv, ':')) {
                 seg.is_param = true;
                 seg.name = std::string(seg_sv.substr(1));
             } else {
@@ -969,7 +1432,7 @@ private:
                 seg.name = std::string(seg_sv);
             }
             segments.push_back(std::move(seg));
-            if (end == std::string_view::npos) break;
+            if (end == string_view::npos) break;
             start = end + 1;
         }
         return segments;
@@ -1016,12 +1479,12 @@ public:
         return current->handlers[method];
     }
 
-    [[nodiscard]] bool match(const Method method, const std::string_view path, HandlerFunc& out_handler, std::unordered_map<std::string, std::string>& out_params) const {
+    HTTPLIB23_NODISCARD bool match(const Method method, const string_view path, HandlerFunc& out_handler, std::unordered_map<std::string, std::string>& out_params) const {
         const auto segments = parse_path(path);
         return match_recursive(&m_root, segments, 0, method, out_handler, out_params);
     }
 
-    [[nodiscard]] std::vector<RouteEntry> get_routes() const {
+    HTTPLIB23_NODISCARD std::vector<RouteEntry> get_routes() const {
         std::vector<RouteEntry> routes;
         collect_routes_recursive(&m_root, routes);
         return routes;
@@ -1029,8 +1492,8 @@ public:
 
 private:
     void collect_routes_recursive(const RouteNode* node, std::vector<RouteEntry>& routes) const {
-        for (const auto& [method, entry] : node->handlers) {
-            routes.push_back(entry);
+        for (const auto& pair : node->handlers) {
+            routes.push_back(pair.second);
         }
         for (const auto& child : node->children) {
             collect_routes_recursive(child.get(), routes);
@@ -1731,8 +2194,8 @@ public:
 
         {
             std::lock_guard<std::mutex> lock(m_session_mutex);
-            for (const auto& [sock, session] : m_sessions) {
-                close_socket(sock);
+            for (const auto& pair : m_sessions) {
+                close_socket(pair.first);
             }
             m_sessions.clear();
         }
@@ -1940,9 +2403,9 @@ private:
             std::vector<socket_t> timed_out_sockets;
             {
                 std::lock_guard<std::mutex> lock(m_session_mutex);
-                for (const auto& [sock, session] : m_sessions) {
-                    if (now_ms - session->get_last_active_ms() > timeout_ms) {
-                        timed_out_sockets.push_back(sock);
+                for (const auto& pair : m_sessions) {
+                    if (now_ms - pair.second->get_last_active_ms() > timeout_ms) {
+                        timed_out_sockets.push_back(pair.first);
                     }
                 }
             }
@@ -2009,14 +2472,14 @@ private:
 
                 bool should_disconnect = false;
                 while (true) {
-                    const std::string_view rx_sv(session->rx_buffer);
+                    const string_view rx_sv(session->rx_buffer);
                     
                     if (!session->header_parsed) {
                         const size_t header_end = rx_sv.find("\r\n\r\n");
-                        if (header_end != std::string_view::npos) {
+                        if (header_end != string_view::npos) {
                             session->header_length = header_end + 4;
                             session->header_parsed = true;
-                            const std::string_view header_sv = rx_sv.substr(0, header_end);
+                            const string_view header_sv = rx_sv.substr(0, header_end);
                             session->content_length = parse_content_length(header_sv);
                             session->keep_alive = parse_keep_alive(header_sv);
 
@@ -2073,20 +2536,20 @@ private:
     }
 #endif
 
-    [[nodiscard]] static size_t parse_content_length(const std::string_view header_sv) noexcept {
+    HTTPLIB23_NODISCARD static size_t parse_content_length(const string_view header_sv) noexcept {
         size_t pos = 0;
         while (pos < header_sv.size()) {
             size_t line_end = header_sv.find("\r\n", pos);
-            if (line_end == std::string_view::npos) line_end = header_sv.size();
-            const std::string_view line = header_sv.substr(pos, line_end - pos);
+            if (line_end == string_view::npos) line_end = header_sv.size();
+            const string_view line = header_sv.substr(pos, line_end - pos);
             const size_t colon = line.find(':');
-            if (colon != std::string_view::npos) {
-                const std::string_view key = detail::trim(line.substr(0, colon));
+            if (colon != string_view::npos) {
+                const string_view key = detail::trim(line.substr(0, colon));
                 if (CaseInsensitiveCompare{}(key, "Content-Length")) {
-                    const std::string_view val = detail::trim(line.substr(colon + 1));
+                    const string_view val = detail::trim(line.substr(colon + 1));
                     size_t len = 0;
-                    const auto [ptr, ec] = std::from_chars(val.data(), val.data() + val.size(), len);
-                    if (ec == std::errc{}) return len;
+                    const auto res = compat::from_chars(val.data(), val.data() + val.size(), len);
+                    if (res.ec == std::errc{}) return len;
                 }
             }
             pos = line_end + 2;
@@ -2094,17 +2557,17 @@ private:
         return 0;
     }
 
-    [[nodiscard]] static bool parse_keep_alive(const std::string_view header_sv) noexcept {
+    HTTPLIB23_NODISCARD static bool parse_keep_alive(const string_view header_sv) noexcept {
         size_t pos = 0;
         while (pos < header_sv.size()) {
             size_t line_end = header_sv.find("\r\n", pos);
-            if (line_end == std::string_view::npos) line_end = header_sv.size();
-            const std::string_view line = header_sv.substr(pos, line_end - pos);
+            if (line_end == string_view::npos) line_end = header_sv.size();
+            const string_view line = header_sv.substr(pos, line_end - pos);
             const size_t colon = line.find(':');
-            if (colon != std::string_view::npos) {
-                const std::string_view key = detail::trim(line.substr(0, colon));
+            if (colon != string_view::npos) {
+                const string_view key = detail::trim(line.substr(0, colon));
                 if (CaseInsensitiveCompare{}(key, "Connection")) {
-                    const std::string_view val = detail::trim(line.substr(colon + 1));
+                    const string_view val = detail::trim(line.substr(colon + 1));
                     if (CaseInsensitiveCompare{}(val, "close")) {
                         return false;
                     }
@@ -2118,7 +2581,7 @@ private:
         return true;
     }
 
-    void send_error_response(ConnectionSession* session, const int32_t status_code, const std::string_view msg) noexcept {
+    void send_error_response(ConnectionSession* session, const int32_t status_code, const string_view msg) noexcept {
         if (!session) return;
         Response res;
         res.status = status_code;
@@ -2133,10 +2596,10 @@ private:
         session->write_io.send_header_buf = res.serialize_headers();
         session->write_io.send_body_buf = std::move(res.body);
 
-        session->write_io.wsa_bufs[0].buf = session->write_io.send_header_buf.data();
+        session->write_io.wsa_bufs[0].buf = const_cast<char*>(session->write_io.send_header_buf.data());
         session->write_io.wsa_bufs[0].len = static_cast<ULONG>(session->write_io.send_header_buf.size());
 
-        session->write_io.wsa_bufs[1].buf = session->write_io.send_body_buf.data();
+        session->write_io.wsa_bufs[1].buf = const_cast<char*>(session->write_io.send_body_buf.data());
         session->write_io.wsa_bufs[1].len = static_cast<ULONG>(session->write_io.send_body_buf.size());
 
         ZeroMemory(&session->write_io.overlapped, sizeof(OVERLAPPED));
@@ -2170,22 +2633,22 @@ private:
         Request req;
         Response res;
 
-        const std::string_view req_sv(request_str);
+        const string_view req_sv(request_str);
         const size_t req_line_end = req_sv.find("\r\n");
-        if (req_line_end != std::string_view::npos) {
-            const std::string_view req_line = req_sv.substr(0, req_line_end);
+        if (req_line_end != string_view::npos) {
+            const string_view req_line = req_sv.substr(0, req_line_end);
             const size_t sp1 = req_line.find(' ');
-            if (sp1 != std::string_view::npos) {
+            if (sp1 != string_view::npos) {
                 const size_t sp2 = req_line.find(' ', sp1 + 1);
-                if (sp2 != std::string_view::npos) {
-                    const std::string_view method_str = req_line.substr(0, sp1);
-                    const std::string_view target = req_line.substr(sp1 + 1, sp2 - sp1 - 1);
+                if (sp2 != string_view::npos) {
+                    const string_view method_str = req_line.substr(0, sp1);
+                    const string_view target = req_line.substr(sp1 + 1, sp2 - sp1 - 1);
                     
                     req.method = string_to_method(method_str);
                     req.raw_target = std::string(target);
 
                     const size_t query_pos = target.find('?');
-                    if (query_pos != std::string_view::npos) {
+                    if (query_pos != string_view::npos) {
                         req.path = std::string(target.substr(0, query_pos));
                         req.query_params = detail::parse_query_string(target.substr(query_pos + 1));
                     } else {
@@ -2197,12 +2660,12 @@ private:
 
         size_t header_pos = req_line_end + 2;
         const size_t header_end_all = req_sv.find("\r\n\r\n");
-        while (header_pos < header_end_all && header_pos != std::string_view::npos) {
+        while (header_pos < header_end_all && header_pos != string_view::npos) {
             size_t line_end = req_sv.find("\r\n", header_pos);
-            if (line_end == std::string_view::npos || line_end > header_end_all) line_end = header_end_all;
-            const std::string_view header_line = req_sv.substr(header_pos, line_end - header_pos);
+            if (line_end == string_view::npos || line_end > header_end_all) line_end = header_end_all;
+            const string_view header_line = req_sv.substr(header_pos, line_end - header_pos);
             const size_t colon = header_line.find(':');
-            if (colon != std::string_view::npos) {
+            if (colon != string_view::npos) {
                 std::string key(detail::trim(header_line.substr(0, colon)));
                 std::string val(detail::trim(header_line.substr(colon + 1)));
                 req.headers[std::move(key)] = std::move(val);
@@ -2210,7 +2673,7 @@ private:
             header_pos = line_end + 2;
         }
 
-        if (header_end_all != std::string_view::npos && header_end_all + 4 <= req_sv.size()) {
+        if (header_end_all != string_view::npos && header_end_all + 4 <= req_sv.size()) {
             req.body = std::string(req_sv.substr(header_end_all + 4));
         }
 
@@ -2231,7 +2694,7 @@ private:
                     handler(req, res);
                 } catch (const std::exception& ex) {
                     res.status = 500;
-                    res.set_content(std::format("500 Internal Server Error: {}", ex.what()), "text/plain; charset=utf-8");
+                    res.set_content("500 Internal Server Error: " + std::string(ex.what()), "text/plain; charset=utf-8");
                 } catch (...) {
                     res.status = 500;
                     res.set_content("500 Internal Server Error: Unknown Exception", "text/plain; charset=utf-8");
@@ -2258,9 +2721,10 @@ private:
 
 public:
     explicit Client(std::string host_or_url, const uint16_t port = 80) : m_host(std::move(host_or_url)), m_port(port) {
-        if (m_host.starts_with("http://")) {
+        string_view host_sv(m_host);
+        if (detail::starts_with(host_sv, "http://")) {
             m_host = m_host.substr(7);
-        } else if (m_host.starts_with("https://")) {
+        } else if (detail::starts_with(host_sv, "https://")) {
             m_host = m_host.substr(8);
         }
 
@@ -2272,9 +2736,9 @@ public:
         const size_t colon = m_host.find(':');
         if (colon != std::string::npos) {
             uint16_t parsed_port = 0;
-            const std::string_view port_sv(m_host.data() + colon + 1, m_host.size() - colon - 1);
-            const auto [ptr, ec] = std::from_chars(port_sv.data(), port_sv.data() + port_sv.size(), parsed_port);
-            if (ec == std::errc{}) {
+            const string_view port_sv(m_host.data() + colon + 1, m_host.size() - colon - 1);
+            const auto res = compat::from_chars(port_sv.data(), port_sv.data() + port_sv.size(), parsed_port);
+            if (res.ec == std::errc{}) {
                 m_port = parsed_port;
             }
             m_host = m_host.substr(0, colon);
@@ -2283,36 +2747,36 @@ public:
 
     ~Client() = default;
 
-    [[nodiscard]] std::expected<Response, std::string> Get(const std::string_view path, const HeaderMap& headers = {}) noexcept {
+    HTTPLIB23_NODISCARD expected<Response, std::string> Get(const string_view path, const HeaderMap& headers = {}) noexcept {
         return send_request(Method::GET, path, "", "", headers);
     }
 
-    [[nodiscard]] std::expected<Response, std::string> Post(const std::string_view path, const std::string_view body, const std::string_view content_type = "application/json", const HeaderMap& headers = {}) noexcept {
+    HTTPLIB23_NODISCARD expected<Response, std::string> Post(const string_view path, const string_view body, const string_view content_type = "application/json", const HeaderMap& headers = {}) noexcept {
         return send_request(Method::POST, path, body, content_type, headers);
     }
 
-    [[nodiscard]] std::expected<Response, std::string> Put(const std::string_view path, const std::string_view body, const std::string_view content_type = "application/json", const HeaderMap& headers = {}) noexcept {
+    HTTPLIB23_NODISCARD expected<Response, std::string> Put(const string_view path, const string_view body, const string_view content_type = "application/json", const HeaderMap& headers = {}) noexcept {
         return send_request(Method::PUT, path, body, content_type, headers);
     }
 
-    [[nodiscard]] std::expected<Response, std::string> Delete(const std::string_view path, const HeaderMap& headers = {}) noexcept {
+    HTTPLIB23_NODISCARD expected<Response, std::string> Delete(const string_view path, const HeaderMap& headers = {}) noexcept {
         return send_request(Method::DELETE, path, "", "", headers);
     }
 
-    [[nodiscard]] std::expected<Response, std::string> send_request(const Method method, const std::string_view path, const std::string_view body = "", const std::string_view content_type = "", const HeaderMap& custom_headers = {}) noexcept {
+    HTTPLIB23_NODISCARD expected<Response, std::string> send_request(const Method method, const string_view path, const string_view body = "", const string_view content_type = "", const HeaderMap& custom_headers = {}) noexcept {
         for (int32_t attempt = 0; attempt < 25; ++attempt) {
             auto res = send_request_once(method, path, body, content_type, custom_headers);
             if (res.has_value()) return res;
             std::this_thread::sleep_for(std::chrono::milliseconds(2 + attempt * 2));
         }
-        return std::unexpected("Failed to receive response after retries");
+        return unexpected<std::string>("Failed to receive response after retries");
     }
 
 private:
-    [[nodiscard]] std::expected<Response, std::string> send_request_once(const Method method, const std::string_view path, const std::string_view body, const std::string_view content_type, const HeaderMap& custom_headers) noexcept {
+    HTTPLIB23_NODISCARD expected<Response, std::string> send_request_once(const Method method, const string_view path, const string_view body, const string_view content_type, const HeaderMap& custom_headers) noexcept {
         const socket_t sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (sock == invalid_socket) {
-            return std::unexpected("Failed to create socket");
+            return unexpected<std::string>("Failed to create socket");
         }
 
         int reuse = 1;
@@ -2341,30 +2805,30 @@ private:
 
         if (!resolved) {
             close_socket(sock);
-            return std::unexpected("Failed to resolve host address");
+            return unexpected<std::string>("Failed to resolve host address");
         }
 
         if (::connect(sock, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) == socket_error_val) {
             close_socket(sock);
-            return std::unexpected("Failed to connect to host");
+            return unexpected<std::string>("Failed to connect to host");
         }
 
         std::string req_str;
-        req_str += std::format("{} {} HTTP/1.1\r\n", method_to_string(method), path);
-        req_str += std::format("Host: {}\r\n", m_host);
+        req_str += std::string(method_to_string(method)) + " " + std::string(path) + " HTTP/1.1\r\n";
+        req_str += "Host: " + m_host + "\r\n";
         req_str += "User-Agent: httplib23-Client/1.0\r\n";
         req_str += "Connection: close\r\n";
 
         if (!body.empty()) {
-            if (!content_type.empty()) req_str += std::format("Content-Type: {}\r\n", content_type);
-            req_str += std::format("Content-Length: {}\r\n", body.size());
+            if (!content_type.empty()) req_str += "Content-Type: " + std::string(content_type) + "\r\n";
+            req_str += "Content-Length: " + std::to_string(body.size()) + "\r\n";
         }
 
-        for (const auto& [k, v] : custom_headers) {
-            req_str += std::format("{}: {}\r\n", k, v);
+        for (const auto& kv : custom_headers) {
+            req_str += kv.first + ": " + kv.second + "\r\n";
         }
         req_str += "\r\n";
-        req_str += body;
+        req_str += std::string(body);
 
 #if defined(HTTPLIB23_PLATFORM_LINUX)
         const ssize_t send_res = ::send(sock, req_str.c_str(), static_cast<int>(req_str.size()), MSG_NOSIGNAL);
@@ -2373,7 +2837,7 @@ private:
 #endif
         if (send_res == socket_error_val) {
             close_socket(sock);
-            return std::unexpected("Failed to send HTTP request");
+            return unexpected<std::string>("Failed to send HTTP request");
         }
 
         std::string raw_response;
@@ -2385,7 +2849,7 @@ private:
         close_socket(sock);
 
         if (raw_response.empty()) {
-            return std::unexpected("Empty response received from server");
+            return unexpected<std::string>("Empty response received from server");
         }
 
         Response response;
@@ -2403,7 +2867,7 @@ private:
             header_line = std::string(detail::trim(header_line));
             if (header_line.empty()) break;
             const size_t colon = header_line.find(':');
-            if (colon != std::string_view::npos) {
+            if (colon != std::string::npos) {
                 std::string key(detail::trim(header_line.substr(0, colon)));
                 std::string val(detail::trim(header_line.substr(colon + 1)));
                 response.headers[key] = val;

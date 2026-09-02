@@ -1,16 +1,17 @@
 // filepath: src/test_runner.cpp
+#include "../include/httplib23.hpp"
 #include <iostream>
 #include <cassert>
 #include <thread>
 #include <vector>
 #include <atomic>
 #include <chrono>
-#include <format>
 #include <stdexcept>
 
-#if __has_include(<print>) && defined(__cpp_lib_print)
+#if defined(HTTPLIB23_CPP23) && __has_include(<print>) && defined(__cpp_lib_print)
     #include <print>
-#else
+#elif defined(HTTPLIB23_CPP20) && __has_include(<format>) && defined(__cpp_lib_format)
+    #include <format>
     namespace std {
         template <typename... Args>
         inline void println(std::format_string<Args...> fmt, Args&&... args) {
@@ -26,8 +27,23 @@
             std::cout << std::format(fmt, std::forward<Args>(args)...);
         }
     }
+#else
+    namespace std {
+        template <typename... Args>
+        inline void println(const char* fmt, Args&&... args) {
+            std::cout << httplib23::compat::format(fmt, std::forward<Args>(args)...) << '\n';
+        }
+        template <typename... Args>
+        inline void println(std::FILE* stream, const char* fmt, Args&&... args) {
+            std::string s = httplib23::compat::format(fmt, std::forward<Args>(args)...) + '\n';
+            std::fputs(s.c_str(), stream);
+        }
+        template <typename... Args>
+        inline void print(const char* fmt, Args&&... args) {
+            std::cout << httplib23::compat::format(fmt, std::forward<Args>(args)...);
+        }
+    }
 #endif
-#include "../include/httplib23.hpp"
 
 /// <summary>
 /// 測試 1: Utility 工具函式測試
@@ -65,9 +81,9 @@ void test_logger() {
     std::vector<std::string> received_logs;
     std::mutex log_mutex;
 
-    httplib23::Logger::instance().set_sink([&received_logs, &log_mutex](httplib23::LogLevel level, std::string_view msg) {
+    httplib23::Logger::instance().set_sink([&received_logs, &log_mutex](httplib23::LogLevel level, httplib23::string_view msg) {
         std::lock_guard<std::mutex> lock(log_mutex);
-        received_logs.push_back(std::format("[{}] {}", httplib23::level_to_string(level), msg));
+        received_logs.push_back(httplib23::compat::format("[{}] {}", httplib23::level_to_string(level), msg));
     });
 
     httplib23::Logger::instance().set_level(httplib23::LogLevel::INFO);
@@ -221,15 +237,16 @@ void test_server_client_integration() {
     server.Get("/users/{id}", "Get User")
         .tag("Users")
         .handle([](const httplib23::Request& req, httplib23::Response& res) noexcept {
-            const auto id = req.get_path_param("id").value_or("0");
-            res.set_json(std::format(R"({{"id":{},"name":"User_{}"}})", id, id));
+            const auto id_opt = req.get_path_param("id");
+            const std::string id = id_opt.has_value() ? id_opt.value() : "0";
+            res.set_json(httplib23::compat::format("{{\"id\":{},\"name\":\"User_{}\"}}", id, id));
         });
 
     // 3. POST /echo
     server.Post("/echo", "Echo Request Body")
         .tag("Test")
         .handle([](const httplib23::Request& req, httplib23::Response& res) noexcept {
-            res.set_json(std::format(R"({{"echo":"{}"}})", req.body));
+            res.set_json(httplib23::compat::format("{{\"echo\":\"{}\"}}", req.body));
         });
 
     // 4. GET /throw (測試 Route Handler 拋出未捕獲例外)
@@ -300,7 +317,7 @@ void test_server_client_integration() {
 
     std::vector<std::thread> workers;
     for (int32_t t = 0; t < NUM_THREADS; ++t) {
-        workers.emplace_back([port, &success_count]() {
+        workers.emplace_back([port, &success_count, REQS_PER_THREAD]() {
             httplib23::Client thread_client("127.0.0.1", port);
             for (int32_t r = 0; r < REQS_PER_THREAD; ++r) {
                 const auto res = thread_client.Get("/ping");
@@ -356,14 +373,13 @@ void test_doc_configuration() {
     // 2. 測試自訂路徑 (set_doc_options)
     {
         httplib23::Server server;
-        httplib23::DocOptions opts{
-            .enabled = true,
-            .openapi_path = "/custom-spec.json",
-            .swagger_path = "/custom-swagger",
-            .scalar_path = "/custom-scalar",
-            .title = "Custom Title API",
-            .version = "3.0.0"
-        };
+        httplib23::DocOptions opts;
+        opts.enabled = true;
+        opts.openapi_path = "/custom-spec.json";
+        opts.swagger_path = "/custom-swagger";
+        opts.scalar_path = "/custom-scalar";
+        opts.title = "Custom Title API";
+        opts.version = "3.0.0";
         server.set_doc_options(opts);
 
         const uint16_t port = 18082;

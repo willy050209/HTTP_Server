@@ -14,9 +14,30 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 SERVERS = [
     {
         "name": "httplib23 (C++23 IOCP)",
-        "id": "cpp_httplib23",
+        "id": "cpp23_httplib23",
         "port": 8181,
-        "cmd": [os.path.join(BASE_DIR, "servers", "cpp_httplib23", "server_cpp.exe"), "8181"],
+        "cmd": [os.path.join(BASE_DIR, "servers", "cpp_httplib23", "server_cpp23.exe") if os.path.exists(os.path.join(BASE_DIR, "servers", "cpp_httplib23", "server_cpp23.exe")) else os.path.join(BASE_DIR, "servers", "cpp_httplib23", "server_cpp.exe"), "8181"],
+        "cwd": os.path.join(BASE_DIR, "servers", "cpp_httplib23")
+    },
+    {
+        "name": "httplib23 (C++20 IOCP)",
+        "id": "cpp20_httplib23",
+        "port": 8181,
+        "cmd": [os.path.join(BASE_DIR, "servers", "cpp_httplib23", "server_cpp20.exe"), "8181"],
+        "cwd": os.path.join(BASE_DIR, "servers", "cpp_httplib23")
+    },
+    {
+        "name": "httplib23 (C++17 IOCP)",
+        "id": "cpp17_httplib23",
+        "port": 8181,
+        "cmd": [os.path.join(BASE_DIR, "servers", "cpp_httplib23", "server_cpp17.exe"), "8181"],
+        "cwd": os.path.join(BASE_DIR, "servers", "cpp_httplib23")
+    },
+    {
+        "name": "httplib23 (C++14/11 IOCP)",
+        "id": "cpp14_httplib23",
+        "port": 8181,
+        "cmd": [os.path.join(BASE_DIR, "servers", "cpp_httplib23", "server_cpp14.exe"), "8181"],
         "cwd": os.path.join(BASE_DIR, "servers", "cpp_httplib23")
     },
     {
