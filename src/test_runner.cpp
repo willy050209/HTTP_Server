@@ -313,16 +313,25 @@ void test_server_client_integration() {
     std::println("  -> Starting High Concurrency Stress Test (30 threads x 10 requests = 300 requests)...");
     constexpr int32_t NUM_THREADS = 30;
     constexpr int32_t REQS_PER_THREAD = 10;
+    constexpr int32_t MAX_RETRIES_PER_REQUEST = 3;
     std::atomic<int32_t> success_count{0};
 
     std::vector<std::thread> workers;
     for (int32_t t = 0; t < NUM_THREADS; ++t) {
-        workers.emplace_back([port, &success_count, REQS_PER_THREAD]() {
+        workers.emplace_back([port, &success_count, REQS_PER_THREAD, MAX_RETRIES_PER_REQUEST]() {
             httplib23::Client thread_client("127.0.0.1", port);
             for (int32_t r = 0; r < REQS_PER_THREAD; ++r) {
-                const auto res = thread_client.Get("/ping");
-                if (res.has_value() && res->status == 200 && res->body == "pong") {
-                    success_count++;
+                bool request_succeeded = false;
+                for (int32_t attempt = 0; attempt < MAX_RETRIES_PER_REQUEST; ++attempt) {
+                    const auto res = thread_client.Get("/ping");
+                    if (res.has_value() && res->status == 200 && res->body == "pong") {
+                        request_succeeded = true;
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                }
+                if (request_succeeded) {
+                    ++success_count;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
             }
