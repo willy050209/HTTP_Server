@@ -1284,7 +1284,7 @@ public:
     HTTPLIB23_NODISCARD static std::string generate_spec(const std::vector<RouteEntry>& routes, const string_view title = "httplib23 API", const string_view version = "1.0.0") {
         std::string json;
         json.reserve(4096);
-        json += compat::format("{{\n  \"openapi\": \"3.0.3\",\n  \"info\": {{\n    \"title\": \"{}\",\n    \"version\": \"{}\"\n  }},\n  \"paths\": {{\n", detail::escape_json(title), detail::escape_json(version));
+        json += compat::format("{\n  \"openapi\": \"3.0.3\",\n  \"info\": {\n    \"title\": \"{}\",\n    \"version\": \"{}\"\n  },\n  \"paths\": {\n", detail::escape_json(title), detail::escape_json(version));
 
         std::map<std::string, std::vector<const RouteEntry*>> path_map;
         for (const auto& entry : routes) {
@@ -1308,7 +1308,7 @@ public:
                 pos += param_name.size() + 2;
             }
 
-            json += compat::format("    \"{}\": {{\n", detail::escape_json(openapi_path));
+            json += compat::format("    \"{}\": {\n", detail::escape_json(openapi_path));
             bool first_method = true;
             for (const auto* entry_ptr : entry_list) {
                 const auto& meta = entry_ptr->meta;
@@ -1321,7 +1321,7 @@ public:
                     return res;
                 }(method_to_string(meta.method));
 
-                json += compat::format("      \"{}\": {{\n", method_lower);
+                json += compat::format("      \"{}\": {\n", method_lower);
                 json += compat::format("        \"summary\": \"{}\",\n", detail::escape_json(meta.summary));
                 json += compat::format("        \"description\": \"{}\"", detail::escape_json(meta.description));
 
@@ -1339,7 +1339,7 @@ public:
                     for (size_t i = 0; i < meta.parameters.size(); ++i) {
                         const auto& p = meta.parameters[i];
                         if (i > 0) json += ",\n";
-                        json += compat::format("          {{\n            \"name\": \"{}\",\n            \"in\": \"{}\",\n            \"required\": {},\n            \"description\": \"{}\",\n            \"schema\": {{ \"type\": \"{}\" }}\n          }}", detail::escape_json(p.name), detail::escape_json(p.in_type), (p.required ? "true" : "false"), detail::escape_json(p.description), detail::escape_json(p.data_type));
+                        json += compat::format("          {\n            \"name\": \"{}\",\n            \"in\": \"{}\",\n            \"required\": {},\n            \"description\": \"{}\",\n            \"schema\": { \"type\": \"{}\" }\n          }", detail::escape_json(p.name), detail::escape_json(p.in_type), (p.required ? "true" : "false"), detail::escape_json(p.description), detail::escape_json(p.data_type));
                     }
                     json += "\n        ]";
                 }
@@ -1351,7 +1351,7 @@ public:
                     for (size_t i = 0; i < meta.responses.size(); ++i) {
                         const auto& r = meta.responses[i];
                         if (i > 0) json += ",\n";
-                        json += compat::format("          \"{}\": {{ \"description\": \"{}\" }}", r.status_code, detail::escape_json(r.description));
+                        json += compat::format("          \"{}\": { \"description\": \"{}\" }", r.status_code, detail::escape_json(r.description));
                     }
                     json += "\n";
                 }

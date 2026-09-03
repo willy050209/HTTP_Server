@@ -218,11 +218,63 @@ void test_openapi_generator() {
     auto& entry = router.add_route(httplib23::Method::GET, "/items/{item_id}", "Get Item");
     entry.meta.tags.push_back("Inventory");
 
+    httplib23::ParameterMeta param;
+    param.name = "item_id";
+    param.in_type = "path";
+    param.required = true;
+    param.description = "Item ID";
+    param.data_type = "integer";
+    entry.meta.parameters.push_back(param);
+
+    httplib23::ResponseMeta resp;
+    resp.status_code = 200;
+    resp.description = "Item found";
+    entry.meta.responses.push_back(resp);
+
     const auto routes = router.get_routes();
     const std::string openapi_json = httplib23::OpenApiGenerator::generate_spec(routes, "Test API", "2.0.0");
     assert(openapi_json.find("openapi") != std::string::npos);
     assert(openapi_json.find("3.0.3") != std::string::npos);
     assert(openapi_json.find("Inventory") != std::string::npos);
+    assert(openapi_json.find("item_id") != std::string::npos);
+
+    // Verify JSON brace balance and no accidental double-brace artifacts outside string literals
+    int brace_count = 0;
+    int bracket_count = 0;
+    bool in_string = false;
+    bool escaped = false;
+    for (size_t i = 0; i < openapi_json.size(); ++i) {
+        char c = openapi_json[i];
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == '"') {
+                in_string = false;
+            }
+        } else {
+            if (c == '"') {
+                in_string = true;
+            } else if (c == '{') {
+                brace_count++;
+                if (i + 1 < openapi_json.size() && openapi_json[i + 1] == '{') {
+                    assert(false && "Found illegal double brace '{{' outside string in OpenAPI JSON!");
+                }
+            } else if (c == '}') {
+                brace_count--;
+                if (i + 1 < openapi_json.size() && openapi_json[i + 1] == '}') {
+                    assert(false && "Found illegal double brace '}}' outside string in OpenAPI JSON!");
+                }
+            } else if (c == '[') {
+                bracket_count++;
+            } else if (c == ']') {
+                bracket_count--;
+            }
+        }
+    }
+    assert(brace_count == 0 && "OpenAPI JSON braces are not balanced!");
+    assert(bracket_count == 0 && "OpenAPI JSON brackets are not balanced!");
 
     const std::string scalar_html = httplib23::ScalarDocGenerator::generate_html("/openapi.json");
     assert(scalar_html.find("<script id=\"api-reference\"") != std::string::npos);
