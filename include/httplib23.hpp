@@ -377,6 +377,20 @@ public:
         return *this;
     }
 
+    optional& operator=(const T& val) {
+        reset();
+        new (m_storage) T(val);
+        m_has_value = true;
+        return *this;
+    }
+
+    optional& operator=(T&& val) {
+        reset();
+        new (m_storage) T(std::move(val));
+        m_has_value = true;
+        return *this;
+    }
+
     void reset() noexcept {
         if (m_has_value) {
             reinterpret_cast<T*>(m_storage)->~T();
@@ -1216,6 +1230,18 @@ struct ResponseMeta {
     std::string content_type = "application/json";
 };
 
+struct RequestBodyMeta {
+    std::string description;
+    std::string example_json;
+    std::string schema_json;
+    bool required = true;
+    std::string content_type = "application/json";
+
+    RequestBodyMeta() = default;
+    RequestBodyMeta(std::string desc, std::string example = "", std::string schema = "", bool req = true, std::string c_type = "application/json")
+        : description(std::move(desc)), example_json(std::move(example)), schema_json(std::move(schema)), required(req), content_type(std::move(c_type)) {}
+};
+
 struct RouteMeta {
     Method method = Method::GET;
     std::string pattern;
@@ -1223,6 +1249,7 @@ struct RouteMeta {
     std::string description;
     std::vector<std::string> tags;
     std::vector<ParameterMeta> parameters;
+    optional<RequestBodyMeta> request_body;
     std::vector<ResponseMeta> responses;
 };
 
@@ -1262,6 +1289,21 @@ public:
         p.in_type = std::move(in_type);
         p.data_type = std::move(data_type);
         m_meta.parameters.push_back(std::move(p));
+        return *this;
+    }
+
+    FluentRoute& body(std::string description, std::string example_json = "", std::string schema_json = "", bool required = true) {
+        RequestBodyMeta rb;
+        rb.description = std::move(description);
+        rb.example_json = std::move(example_json);
+        rb.schema_json = std::move(schema_json);
+        rb.required = required;
+        m_meta.request_body = std::move(rb);
+        return *this;
+    }
+
+    FluentRoute& body(RequestBodyMeta rb) {
+        m_meta.request_body = std::move(rb);
         return *this;
     }
 
@@ -1342,6 +1384,25 @@ public:
                         json += compat::format("          {\n            \"name\": \"{}\",\n            \"in\": \"{}\",\n            \"required\": {},\n            \"description\": \"{}\",\n            \"schema\": { \"type\": \"{}\" }\n          }", detail::escape_json(p.name), detail::escape_json(p.in_type), (p.required ? "true" : "false"), detail::escape_json(p.description), detail::escape_json(p.data_type));
                     }
                     json += "\n        ]";
+                }
+
+                if (meta.request_body.has_value()) {
+                    const auto& rb = *meta.request_body;
+                    json += ",\n        \"requestBody\": {\n";
+                    if (!rb.description.empty()) {
+                        json += compat::format("          \"description\": \"{}\",\n", detail::escape_json(rb.description));
+                    }
+                    json += compat::format("          \"required\": {},\n", (rb.required ? "true" : "false"));
+                    const std::string content_type = rb.content_type.empty() ? "application/json" : rb.content_type;
+                    json += compat::format("          \"content\": {\n            \"{}\": {\n", detail::escape_json(content_type));
+
+                    const std::string schema_val = rb.schema_json.empty() ? "{ \"type\": \"object\" }" : rb.schema_json;
+                    json += "              \"schema\": " + schema_val;
+
+                    if (!rb.example_json.empty()) {
+                        json += ",\n              \"example\": " + rb.example_json;
+                    }
+                    json += "\n            }\n          }\n        }";
                 }
 
                 json += ",\n        \"responses\": {\n";

@@ -276,6 +276,83 @@ void test_openapi_generator() {
     assert(brace_count == 0 && "OpenAPI JSON braces are not balanced!");
     assert(bracket_count == 0 && "OpenAPI JSON brackets are not balanced!");
 
+    // 測試 FluentRoute::body 與 RequestBodyMeta
+    auto& post_entry = router.add_route(httplib23::Method::POST, "/items", "Create Item");
+    httplib23::FluentRoute fluent_post(post_entry.meta, post_entry.handler);
+    fluent_post.tag("Inventory")
+               .summary("Create Item")
+               .description("Create a new item in the catalog")
+               .body("Item creation payload", "{\"name\": \"Gadget\", \"price\": 99.9}", "{\"type\": \"object\", \"properties\": {\"name\": {\"type\": \"string\"}, \"price\": {\"type\": \"number\"}}}", true)
+               .response(201, "Item created");
+
+    assert(post_entry.meta.request_body.has_value());
+    assert(post_entry.meta.request_body->description == "Item creation payload");
+    assert(post_entry.meta.request_body->example_json == "{\"name\": \"Gadget\", \"price\": 99.9}");
+    assert(post_entry.meta.request_body->required == true);
+
+    // 測試預設 schema 與無 example 之 RequestBody (required = false)
+    auto& put_entry = router.add_route(httplib23::Method::PUT, "/items/{item_id}", "Update Item");
+    httplib23::FluentRoute fluent_put(put_entry.meta, put_entry.handler);
+    fluent_put.body("Update item payload", "", "", false);
+
+    assert(put_entry.meta.request_body.has_value());
+    assert(put_entry.meta.request_body->required == false);
+    assert(put_entry.meta.request_body->schema_json.empty());
+    assert(put_entry.meta.request_body->example_json.empty());
+
+    // 測試 Server::Post 鏈式呼叫 .body()
+    {
+        httplib23::Server server_fluent;
+        server_fluent.Post("/api/v1/products", "Create product")
+            .body("Product payload", "{\"sku\": \"ABC\"}", "{\"type\": \"object\"}", true)
+            .handle([](const httplib23::Request&, httplib23::Response& res) {
+                res.status = 201;
+            });
+    }
+
+    const auto routes_with_body = router.get_routes();
+    const std::string openapi_with_body = httplib23::OpenApiGenerator::generate_spec(routes_with_body, "Extended API", "2.1.0");
+
+    assert(openapi_with_body.find("\"requestBody\"") != std::string::npos);
+    assert(openapi_with_body.find("Item creation payload") != std::string::npos);
+    assert(openapi_with_body.find("\"example\": {\"name\": \"Gadget\"") != std::string::npos);
+    assert(openapi_with_body.find("\"properties\"") != std::string::npos);
+    assert(openapi_with_body.find("Update item payload") != std::string::npos);
+    assert(openapi_with_body.find("\"required\": false") != std::string::npos);
+    assert(openapi_with_body.find("\"type\": \"object\"") != std::string::npos);
+
+    // 驗證擴充後的 OpenAPI JSON 括號平衡無雙大括號
+    int brace_count2 = 0;
+    int bracket_count2 = 0;
+    bool in_string2 = false;
+    bool escaped2 = false;
+    for (size_t i = 0; i < openapi_with_body.size(); ++i) {
+        char c = openapi_with_body[i];
+        if (in_string2) {
+            if (escaped2) {
+                escaped2 = false;
+            } else if (c == '\\') {
+                escaped2 = true;
+            } else if (c == '"') {
+                in_string2 = false;
+            }
+        } else {
+            if (c == '"') {
+                in_string2 = true;
+            } else if (c == '{') {
+                brace_count2++;
+            } else if (c == '}') {
+                brace_count2--;
+            } else if (c == '[') {
+                bracket_count2++;
+            } else if (c == ']') {
+                bracket_count2--;
+            }
+        }
+    }
+    assert(brace_count2 == 0 && "OpenAPI JSON with requestBody braces are not balanced!");
+    assert(bracket_count2 == 0 && "OpenAPI JSON with requestBody brackets are not balanced!");
+
     const std::string scalar_html = httplib23::ScalarDocGenerator::generate_html("/openapi.json");
     assert(scalar_html.find("<script id=\"api-reference\"") != std::string::npos);
 

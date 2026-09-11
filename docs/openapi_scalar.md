@@ -79,6 +79,10 @@ server.Post("/api/v1/products", "建立新商品")
     .summary("新增商品至資料庫")                 // 摘要說明 (Summary)
     .description("提供詳細商品資訊以建立系統資料")  // 詳細描述 (Description)
     .param("category", "商品分類名稱", true, "query", "string") // Query 參數
+    .body("商品建立負載", 
+          R"({"name": "MacBook Pro", "price": 1999})",          // 預填 Example 物件
+          R"({"type": "object", "properties": {"name": {"type": "string"}, "price": {"type": "number"}}})", // Schema JSON
+          true)                                                // 是否必填 (required)
     .response(201, "成功建立商品", "application/json")          // 201 Response 描述
     .response(400, "無效的商品格式", "application/json")        // 400 Response 描述
     .handle([](const httplib23::Request& req, httplib23::Response& res) {
